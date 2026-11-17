@@ -148,7 +148,7 @@ public class AttemptMaskingTests(PostgresFixture postgres) : IClassFixture<Postg
 
         // As an agent before 0.6.2 writes a nearly idle host's load.
         var older = await agent.NextAsync("observe");
-        Assert.True(await agent.ReportAsync(older, Outcome.Succeeded,
+        Assert.True(await agent.ReportOffContractAsync(older, Outcome.Succeeded,
             JsonNode.Parse("""{"hosts": [{"name": "korriban", "online": true, "cpu": 4.2e-7}], "ratio": 1.50e1, "n": 1.50}""")!.AsObject()));
         var kept = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == Guid.Parse(older.AttemptId)));
         Assert.Equal(AttemptStatuses.Succeeded, kept.Status);
@@ -163,7 +163,7 @@ public class AttemptMaskingTests(PostgresFixture postgres) : IClassFixture<Postg
         {
             await server.Services.GetRequiredService<Planner>().ObserveAsync(installation.Id, CancellationToken.None);
             var observation = await agent.NextAsync("observe");
-            Assert.True(await agent.ReportAsync(observation, Outcome.Succeeded, JsonNode.Parse(outputs)!.AsObject()));
+            Assert.True(await agent.ReportOffContractAsync(observation, Outcome.Succeeded, JsonNode.Parse(outputs)!.AsObject()));
             var attempt = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == Guid.Parse(observation.AttemptId)));
             Assert.Equal((AttemptStatuses.Failed, reason), (attempt.Status, attempt.Error));
             Assert.False(await server.QueryAsync(db => db.Observations.AnyAsync(o => o.AttemptId == attempt.Id)));
@@ -257,19 +257,19 @@ public class AttemptMaskingTests(PostgresFixture postgres) : IClassFixture<Postg
         var agent = await server.ConnectAgentAsync("home");
         Assert.True(await agent.ReportAsync(await agent.NextAsync("preview"), Outcome.Succeeded, FakeAgent.Plan(create: 1), artifacts: FakeAgent.PlanArtifact()));
         var apply = await agent.NextAsync("apply");
-        Assert.True(await agent.ReportAsync(apply, Outcome.Succeeded, new JsonObject { ["ok"] = true }));
+        Assert.True(await agent.ReportOffContractAsync(apply, Outcome.Succeeded, new JsonObject { ["ok"] = true }));
         var id = Guid.Parse(apply.AttemptId);
         var first = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == id));
         Assert.Equal(AttemptStatuses.Uncertain, first.Status);
         Assert.False(first.LateResult);
 
-        Assert.True(await agent.ReportAsync(apply, Outcome.Succeeded, new JsonObject { ["ok"] = true }));
+        Assert.True(await agent.ReportOffContractAsync(apply, Outcome.Succeeded, new JsonObject { ["ok"] = true }));
         var replayed = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == id));
         Assert.Equal((first.Status, first.FinishedAt, first.LateResult, first.Error), (replayed.Status, replayed.FinishedAt, replayed.LateResult, replayed.Error));
         Assert.True(replayed.OutputsWithheld);
 
         // Nor does another result: the server settled this one itself, from the result it had.
-        Assert.True(await agent.ReportAsync(apply, Outcome.Succeeded, new JsonObject { ["ok"] = "fine" }));
+        Assert.True(await agent.ReportOffContractAsync(apply, Outcome.Succeeded, new JsonObject { ["ok"] = "fine" }));
         var other = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == id));
         Assert.Equal((first.Status, first.FinishedAt, first.LateResult, (string?)null), (other.Status, other.FinishedAt, other.LateResult, other.Outputs));
     }
@@ -320,7 +320,7 @@ public class AttemptMaskingTests(PostgresFixture postgres) : IClassFixture<Postg
         Assert.Contains(Secret, observation.Secrets.Values);
         var id = Guid.Parse(observation.AttemptId);
 
-        await agent.ReportAsync(observation, Outcome.Succeeded,
+        await agent.ReportOffContractAsync(observation, Outcome.Succeeded,
             new JsonObject { ["echo"] = Secret, ["plain"] = "ordinary output", ["cluster"] = new JsonObject { ["name"] = Secret } }, $"error {Secret}");
 
         var attempt = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == id));

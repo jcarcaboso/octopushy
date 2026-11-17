@@ -1,0 +1,49 @@
+{
+  "ipv4_addresses": {
+    "sensitive": false,
+    "type": [
+      "tuple",
+      [
+        [
+          "tuple",
+          [
+            "string"
+          ]
+        ],
+        [
+          "tuple",
+          [
+            "string"
+          ]
+        ]
+      ]
+    ],
+    "value": [
+      [
+        "127.0.0.1"
+      ],
+      [
+        "10.1.0.31"
+      ]
+    ]
+  },
+  "mac_addresses": {
+    "sensitive": false,
+    "type": [
+      "tuple",
+      [
+        "string",
+        "string"
+      ]
+    ],
+    "value": [
+      "00:00:00:00:00:00",
+      "BC:24:11:3E:5A:01"
+    ]
+  },
+  "vm_id": {
+    "sensitive": false,
+    "type": "number",
+    "value": 310
+  }
+}

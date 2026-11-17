@@ -1,0 +1,17 @@
+{
+  "detail": "Work started at 1794922433.",
+  "exitCode": 0,
+  "failedTask": null,
+  "outcome": "deferred",
+  "recap": {
+    "changed": 0,
+    "failures": 0,
+    "ignored": 0,
+    "ok": 2,
+    "rescued": 0,
+    "skipped": 0,
+    "unreachable": 0
+  },
+  "tasks": 3,
+  "unreachableTask": null
+}

@@ -1,0 +1,1 @@
+ansible-playbook [core 2.21.5]

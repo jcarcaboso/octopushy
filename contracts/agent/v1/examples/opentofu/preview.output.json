@@ -1,0 +1,74 @@
+{
+  "changes": [
+    {
+      "actions": [
+        "create"
+      ],
+      "address": "proxmox_download_file.image",
+      "importing": false,
+      "name": "image",
+      "proxmox": true,
+      "targets": [
+        {
+          "node": "korriban"
+        }
+      ],
+      "type": "proxmox_download_file"
+    },
+    {
+      "actions": [
+        "create"
+      ],
+      "address": "proxmox_virtual_environment_vm.guest",
+      "attributes": [
+        {
+          "after": 2,
+          "name": "cpu.cores"
+        },
+        {
+          "after": 1,
+          "name": "cpu.sockets"
+        },
+        {
+          "after": 4096,
+          "name": "memory.dedicated"
+        },
+        {
+          "after": 32,
+          "name": "disk.scsi0.size"
+        },
+        {
+          "after": [
+            "home",
+            "octopushy"
+          ],
+          "name": "tags"
+        },
+        {
+          "after": "vmbr0",
+          "name": "network_device.0.bridge"
+        }
+      ],
+      "importing": false,
+      "name": "guest",
+      "node": "korriban",
+      "proxmox": true,
+      "targets": [
+        {
+          "node": "korriban",
+          "vmId": 310
+        }
+      ],
+      "type": "proxmox_virtual_environment_vm",
+      "vmId": 310
+    }
+  ],
+  "counts": {
+    "create": 2,
+    "delete": 0,
+    "replace": 0,
+    "update": 0
+  },
+  "hasChanges": true,
+  "toolVersion": "1.13.1"
+}

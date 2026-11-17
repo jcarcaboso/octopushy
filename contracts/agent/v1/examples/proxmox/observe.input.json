@@ -1,0 +1,15 @@
+{
+  "connection": {
+    "endpoint": "https://10.1.0.10:8006/",
+    "verifyTls": false,
+    "caCertificatePem": null
+  },
+  "node": null,
+  "vmid": null,
+  "kind": "qemu",
+  "name": null,
+  "expectRunning": true,
+  "expectIpv4": null,
+  "waitSeconds": 300,
+  "protection": false
+}

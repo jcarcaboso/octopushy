@@ -1,0 +1,1287 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.13.1",
+  "variables": {
+    "admin_user": {
+      "value": "ops"
+    },
+    "guest": {
+      "value": {
+        "hardware": {
+          "cores": 2,
+          "disks": [
+            {
+              "size": 32
+            }
+          ],
+          "memory": 4096
+        },
+        "host": "korriban",
+        "id": "krb-app-01",
+        "network": {
+          "address": "10.1.0.31/24",
+          "bridge": "vmbr0",
+          "dns": [
+            "10.1.0.1"
+          ],
+          "gateway": "10.1.0.1",
+          "mode": "static"
+        },
+        "profiles": [],
+        "sshAuthorizedKeys": [
+          "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyReplaceMeWithYourOwnPublicKey00 ops@example"
+        ],
+        "template": "fedora-44",
+        "vmid": 310
+      }
+    },
+    "host": {
+      "value": {
+        "bridges": [
+          "vmbr0"
+        ],
+        "datastores": {
+          "disks": "local-lvm",
+          "images": "local"
+        },
+        "id": "korriban"
+      }
+    },
+    "inputs": {
+      "value": {
+        "machine_tools_channel": "stable"
+      }
+    },
+    "octopushy": {
+      "value": {
+        "address": "home/korriban/krb-app-01",
+        "installation": "korriban",
+        "lab": "home",
+        "revision": "6a85288183cdbc40ec08f9718ddf040f85fb2e2d",
+        "stack": "home.korriban.krb-app-01",
+        "workflow": "machine-tools@1.0"
+      }
+    },
+    "template": {
+      "value": {
+        "id": "fedora-44",
+        "os": "fedora",
+        "source": {
+          "checksum": "28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f",
+          "checksumAlgorithm": "sha256",
+          "fileName": "Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2",
+          "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2"
+        }
+      }
+    }
+  },
+  "planned_values": {
+    "outputs": {
+      "ipv4_addresses": {
+        "sensitive": false
+      },
+      "mac_addresses": {
+        "sensitive": false
+      },
+      "vm_id": {
+        "sensitive": false,
+        "type": "number",
+        "value": 310
+      }
+    },
+    "root_module": {
+      "resources": [
+        {
+          "address": "proxmox_download_file.image",
+          "mode": "managed",
+          "type": "proxmox_download_file",
+          "name": "image",
+          "provider_name": "registry.opentofu.org/bpg/proxmox",
+          "schema_version": 0,
+          "values": {
+            "checksum": "28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f",
+            "checksum_algorithm": "sha256",
+            "content_type": "import",
+            "datastore_id": "local",
+            "decompression_algorithm": null,
+            "file_name": "krb-app-01-Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2",
+            "node_name": "korriban",
+            "overwrite": true,
+            "overwrite_unmanaged": false,
+            "upload_timeout": 600,
+            "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2",
+            "verify": true
+          },
+          "sensitive_values": {}
+        },
+        {
+          "address": "proxmox_virtual_environment_vm.guest",
+          "mode": "managed",
+          "type": "proxmox_virtual_environment_vm",
+          "name": "guest",
+          "provider_name": "registry.opentofu.org/bpg/proxmox",
+          "schema_version": 0,
+          "values": {
+            "acpi": true,
+            "agent": [
+              {
+                "enabled": true,
+                "timeout": "15m",
+                "trim": true,
+                "type": "virtio",
+                "wait_for_ip": []
+              }
+            ],
+            "amd_sev": [],
+            "audio_device": [],
+            "bios": "ovmf",
+            "cdrom": [],
+            "clone": [],
+            "cpu": [
+              {
+                "affinity": null,
+                "architecture": null,
+                "cores": 2,
+                "flags": null,
+                "hotplugged": 0,
+                "limit": 0,
+                "numa": false,
+                "sockets": 1,
+                "type": "x86-64-v2-AES"
+              }
+            ],
+            "delete_unreferenced_disks_on_destroy": true,
+            "description": "Managed by Octopushy as home/korriban/krb-app-01.",
+            "disk": [
+              {
+                "aio": "io_uring",
+                "backup": true,
+                "cache": "none",
+                "datastore_id": "local-lvm",
+                "discard": "on",
+                "file_id": null,
+                "interface": "scsi0",
+                "iothread": true,
+                "queues": 0,
+                "replicate": true,
+                "serial": null,
+                "size": 32,
+                "speed": [],
+                "ssd": false
+              }
+            ],
+            "efi_disk": [
+              {
+                "datastore_id": "local-lvm",
+                "pre_enrolled_keys": false,
+                "type": "4m"
+              }
+            ],
+            "hook_script_file_id": null,
+            "hostpci": [],
+            "initialization": [
+              {
+                "datastore_id": "local-lvm",
+                "dns": [
+                  {
+                    "domain": null,
+                    "servers": [
+                      "10.1.0.1"
+                    ]
+                  }
+                ],
+                "interface": null,
+                "ip_config": [
+                  {
+                    "ipv4": [
+                      {
+                        "address": "10.1.0.31/24",
+                        "gateway": "10.1.0.1"
+                      }
+                    ],
+                    "ipv6": []
+                  }
+                ],
+                "user_account": [
+                  {
+                    "keys": [
+                      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyReplaceMeWithYourOwnPublicKey00 ops@example"
+                    ],
+                    "password": null,
+                    "username": "ops"
+                  }
+                ]
+              }
+            ],
+            "keyboard_layout": "en-us",
+            "kvm_arguments": null,
+            "machine": "q35",
+            "memory": [
+              {
+                "dedicated": 4096,
+                "floating": 0,
+                "hugepages": null,
+                "keep_hugepages": false,
+                "shared": 0
+              }
+            ],
+            "migrate": true,
+            "name": "krb-app-01",
+            "network_device": [
+              {
+                "bridge": "vmbr0",
+                "disconnected": null,
+                "enabled": true,
+                "firewall": false,
+                "model": "virtio",
+                "mtu": 0,
+                "queues": 0,
+                "rate_limit": 0,
+                "trunks": null,
+                "vlan_id": 0
+              }
+            ],
+            "node_name": "korriban",
+            "numa": [],
+            "on_boot": true,
+            "operating_system": [
+              {
+                "type": "l26"
+              }
+            ],
+            "pool_id": null,
+            "protection": true,
+            "purge_on_destroy": true,
+            "reboot": false,
+            "reboot_after_update": true,
+            "rng": [],
+            "scsi_hardware": "virtio-scsi-single",
+            "serial_device": [
+              {
+                "device": "socket"
+              }
+            ],
+            "smbios": [],
+            "started": true,
+            "startup": [],
+            "stop_on_destroy": true,
+            "tablet_device": true,
+            "tags": [
+              "home",
+              "octopushy"
+            ],
+            "template": false,
+            "timeout_clone": 1800,
+            "timeout_create": 1800,
+            "timeout_migrate": 1800,
+            "timeout_move_disk": 1800,
+            "timeout_reboot": 1800,
+            "timeout_shutdown_vm": 1800,
+            "timeout_start_vm": 1800,
+            "timeout_stop_vm": 300,
+            "tpm_state": [],
+            "usb": [],
+            "virtiofs": [],
+            "vm_id": 310,
+            "watchdog": []
+          },
+          "sensitive_values": {
+            "agent": [
+              {
+                "wait_for_ip": []
+              }
+            ],
+            "amd_sev": [],
+            "audio_device": [],
+            "boot_order": [],
+            "cdrom": [],
+            "clone": [],
+            "cpu": [
+              {}
+            ],
+            "disk": [
+              {
+                "speed": []
+              }
+            ],
+            "efi_disk": [
+              {}
+            ],
+            "hostpci": [],
+            "initialization": [
+              {
+                "dns": [
+                  {
+                    "servers": [
+                      false
+                    ]
+                  }
+                ],
+                "ip_config": [
+                  {
+                    "ipv4": [
+                      {}
+                    ],
+                    "ipv6": []
+                  }
+                ],
+                "user_account": [
+                  {
+                    "keys": [
+                      false
+                    ],
+                    "password": true
+                  }
+                ]
+              }
+            ],
+            "ipv4_addresses": [],
+            "ipv6_addresses": [],
+            "mac_addresses": [],
+            "memory": [
+              {}
+            ],
+            "network_device": [
+              {}
+            ],
+            "network_interface_names": [],
+            "numa": [],
+            "operating_system": [
+              {}
+            ],
+            "rng": [],
+            "serial_device": [
+              {}
+            ],
+            "smbios": [],
+            "startup": [],
+            "tags": [
+              false,
+              false
+            ],
+            "tpm_state": [],
+            "usb": [],
+            "vga": [],
+            "virtiofs": [],
+            "watchdog": []
+          }
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "proxmox_download_file.image",
+      "mode": "managed",
+      "type": "proxmox_download_file",
+      "name": "image",
+      "provider_name": "registry.opentofu.org/bpg/proxmox",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "checksum": "28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f",
+          "checksum_algorithm": "sha256",
+          "content_type": "import",
+          "datastore_id": "local",
+          "decompression_algorithm": null,
+          "file_name": "krb-app-01-Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2",
+          "node_name": "korriban",
+          "overwrite": true,
+          "overwrite_unmanaged": false,
+          "upload_timeout": 600,
+          "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2",
+          "verify": true
+        },
+        "after_unknown": {
+          "id": true,
+          "size": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "proxmox_virtual_environment_vm.guest",
+      "mode": "managed",
+      "type": "proxmox_virtual_environment_vm",
+      "name": "guest",
+      "provider_name": "registry.opentofu.org/bpg/proxmox",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "acpi": true,
+          "agent": [
+            {
+              "enabled": true,
+              "timeout": "15m",
+              "trim": true,
+              "type": "virtio",
+              "wait_for_ip": []
+            }
+          ],
+          "amd_sev": [],
+          "audio_device": [],
+          "bios": "ovmf",
+          "cdrom": [],
+          "clone": [],
+          "cpu": [
+            {
+              "affinity": null,
+              "architecture": null,
+              "cores": 2,
+              "flags": null,
+              "hotplugged": 0,
+              "limit": 0,
+              "numa": false,
+              "sockets": 1,
+              "type": "x86-64-v2-AES"
+            }
+          ],
+          "delete_unreferenced_disks_on_destroy": true,
+          "description": "Managed by Octopushy as home/korriban/krb-app-01.",
+          "disk": [
+            {
+              "aio": "io_uring",
+              "backup": true,
+              "cache": "none",
+              "datastore_id": "local-lvm",
+              "discard": "on",
+              "file_id": null,
+              "interface": "scsi0",
+              "iothread": true,
+              "queues": 0,
+              "replicate": true,
+              "serial": null,
+              "size": 32,
+              "speed": [],
+              "ssd": false
+            }
+          ],
+          "efi_disk": [
+            {
+              "datastore_id": "local-lvm",
+              "pre_enrolled_keys": false,
+              "type": "4m"
+            }
+          ],
+          "hook_script_file_id": null,
+          "hostpci": [],
+          "initialization": [
+            {
+              "datastore_id": "local-lvm",
+              "dns": [
+                {
+                  "domain": null,
+                  "servers": [
+                    "10.1.0.1"
+                  ]
+                }
+              ],
+              "interface": null,
+              "ip_config": [
+                {
+                  "ipv4": [
+                    {
+                      "address": "10.1.0.31/24",
+                      "gateway": "10.1.0.1"
+                    }
+                  ],
+                  "ipv6": []
+                }
+              ],
+              "user_account": [
+                {
+                  "keys": [
+                    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyReplaceMeWithYourOwnPublicKey00 ops@example"
+                  ],
+                  "password": null,
+                  "username": "ops"
+                }
+              ]
+            }
+          ],
+          "keyboard_layout": "en-us",
+          "kvm_arguments": null,
+          "machine": "q35",
+          "memory": [
+            {
+              "dedicated": 4096,
+              "floating": 0,
+              "hugepages": null,
+              "keep_hugepages": false,
+              "shared": 0
+            }
+          ],
+          "migrate": true,
+          "name": "krb-app-01",
+          "network_device": [
+            {
+              "bridge": "vmbr0",
+              "disconnected": null,
+              "enabled": true,
+              "firewall": false,
+              "model": "virtio",
+              "mtu": 0,
+              "queues": 0,
+              "rate_limit": 0,
+              "trunks": null,
+              "vlan_id": 0
+            }
+          ],
+          "node_name": "korriban",
+          "numa": [],
+          "on_boot": true,
+          "operating_system": [
+            {
+              "type": "l26"
+            }
+          ],
+          "pool_id": null,
+          "protection": true,
+          "purge_on_destroy": true,
+          "reboot": false,
+          "reboot_after_update": true,
+          "rng": [],
+          "scsi_hardware": "virtio-scsi-single",
+          "serial_device": [
+            {
+              "device": "socket"
+            }
+          ],
+          "smbios": [],
+          "started": true,
+          "startup": [],
+          "stop_on_destroy": true,
+          "tablet_device": true,
+          "tags": [
+            "home",
+            "octopushy"
+          ],
+          "template": false,
+          "timeout_clone": 1800,
+          "timeout_create": 1800,
+          "timeout_migrate": 1800,
+          "timeout_move_disk": 1800,
+          "timeout_reboot": 1800,
+          "timeout_shutdown_vm": 1800,
+          "timeout_start_vm": 1800,
+          "timeout_stop_vm": 300,
+          "tpm_state": [],
+          "usb": [],
+          "virtiofs": [],
+          "vm_id": 310,
+          "watchdog": []
+        },
+        "after_unknown": {
+          "agent": [
+            {
+              "wait_for_ip": []
+            }
+          ],
+          "amd_sev": [],
+          "audio_device": [],
+          "boot_order": true,
+          "cdrom": [],
+          "clone": [],
+          "cpu": [
+            {
+              "units": true
+            }
+          ],
+          "disk": [
+            {
+              "file_format": true,
+              "import_from": true,
+              "path_in_datastore": true,
+              "speed": []
+            }
+          ],
+          "efi_disk": [
+            {
+              "file_format": true
+            }
+          ],
+          "hostpci": [],
+          "hotplug": true,
+          "id": true,
+          "initialization": [
+            {
+              "dns": [
+                {
+                  "servers": [
+                    false
+                  ]
+                }
+              ],
+              "file_format": true,
+              "ip_config": [
+                {
+                  "ipv4": [
+                    {}
+                  ],
+                  "ipv6": []
+                }
+              ],
+              "meta_data_file_id": true,
+              "network_data_file_id": true,
+              "type": true,
+              "upgrade": true,
+              "user_account": [
+                {
+                  "keys": [
+                    false
+                  ]
+                }
+              ],
+              "user_data_file_id": true,
+              "vendor_data_file_id": true
+            }
+          ],
+          "ipv4_addresses": true,
+          "ipv6_addresses": true,
+          "mac_addresses": true,
+          "memory": [
+            {}
+          ],
+          "network_device": [
+            {
+              "mac_address": true
+            }
+          ],
+          "network_interface_names": true,
+          "numa": [],
+          "operating_system": [
+            {}
+          ],
+          "rng": [],
+          "serial_device": [
+            {}
+          ],
+          "smbios": [],
+          "startup": [],
+          "tags": [
+            false,
+            false
+          ],
+          "tpm_state": [],
+          "usb": [],
+          "vga": true,
+          "virtiofs": [],
+          "watchdog": []
+        },
+        "before_sensitive": false,
+        "after_sensitive": {
+          "agent": [
+            {
+              "wait_for_ip": []
+            }
+          ],
+          "amd_sev": [],
+          "audio_device": [],
+          "boot_order": [],
+          "cdrom": [],
+          "clone": [],
+          "cpu": [
+            {}
+          ],
+          "disk": [
+            {
+              "speed": []
+            }
+          ],
+          "efi_disk": [
+            {}
+          ],
+          "hostpci": [],
+          "initialization": [
+            {
+              "dns": [
+                {
+                  "servers": [
+                    false
+                  ]
+                }
+              ],
+              "ip_config": [
+                {
+                  "ipv4": [
+                    {}
+                  ],
+                  "ipv6": []
+                }
+              ],
+              "user_account": [
+                {
+                  "keys": [
+                    false
+                  ],
+                  "password": true
+                }
+              ]
+            }
+          ],
+          "ipv4_addresses": [],
+          "ipv6_addresses": [],
+          "mac_addresses": [],
+          "memory": [
+            {}
+          ],
+          "network_device": [
+            {}
+          ],
+          "network_interface_names": [],
+          "numa": [],
+          "operating_system": [
+            {}
+          ],
+          "rng": [],
+          "serial_device": [
+            {}
+          ],
+          "smbios": [],
+          "startup": [],
+          "tags": [
+            false,
+            false
+          ],
+          "tpm_state": [],
+          "usb": [],
+          "vga": [],
+          "virtiofs": [],
+          "watchdog": []
+        }
+      }
+    }
+  ],
+  "output_changes": {
+    "ipv4_addresses": {
+      "actions": [
+        "create"
+      ],
+      "before": null,
+      "after_unknown": true,
+      "before_sensitive": false,
+      "after_sensitive": false
+    },
+    "mac_addresses": {
+      "actions": [
+        "create"
+      ],
+      "before": null,
+      "after_unknown": true,
+      "before_sensitive": false,
+      "after_sensitive": false
+    },
+    "vm_id": {
+      "actions": [
+        "create"
+      ],
+      "before": null,
+      "after": 310,
+      "after_unknown": false,
+      "before_sensitive": false,
+      "after_sensitive": false
+    }
+  },
+  "prior_state": {
+    "format_version": "1.0",
+    "terraform_version": "1.13.1",
+    "values": {
+      "outputs": {
+        "vm_id": {
+          "sensitive": false,
+          "value": 310,
+          "type": "number"
+        }
+      },
+      "root_module": {}
+    }
+  },
+  "configuration": {
+    "provider_config": {
+      "proxmox": {
+        "name": "proxmox",
+        "full_name": "registry.opentofu.org/bpg/proxmox",
+        "version_constraint": "~> 0.117.0"
+      }
+    },
+    "root_module": {
+      "outputs": {
+        "ipv4_addresses": {
+          "expression": {
+            "references": [
+              "proxmox_virtual_environment_vm.guest.ipv4_addresses",
+              "proxmox_virtual_environment_vm.guest"
+            ]
+          }
+        },
+        "mac_addresses": {
+          "expression": {
+            "references": [
+              "proxmox_virtual_environment_vm.guest.mac_addresses",
+              "proxmox_virtual_environment_vm.guest"
+            ]
+          }
+        },
+        "vm_id": {
+          "expression": {
+            "references": [
+              "proxmox_virtual_environment_vm.guest.vm_id",
+              "proxmox_virtual_environment_vm.guest"
+            ]
+          }
+        }
+      },
+      "resources": [
+        {
+          "address": "proxmox_download_file.image",
+          "mode": "managed",
+          "type": "proxmox_download_file",
+          "name": "image",
+          "provider_config_key": "proxmox",
+          "expressions": {
+            "checksum": {
+              "references": [
+                "var.template.source.checksum",
+                "var.template.source",
+                "var.template"
+              ]
+            },
+            "checksum_algorithm": {
+              "references": [
+                "var.template.source.checksumAlgorithm",
+                "var.template.source",
+                "var.template"
+              ]
+            },
+            "content_type": {
+              "constant_value": "import"
+            },
+            "datastore_id": {
+              "references": [
+                "local.images_datastore"
+              ]
+            },
+            "file_name": {
+              "references": [
+                "var.guest.id",
+                "var.guest",
+                "var.template.source.fileName",
+                "var.template.source",
+                "var.template"
+              ]
+            },
+            "node_name": {
+              "references": [
+                "var.guest.host",
+                "var.guest"
+              ]
+            },
+            "url": {
+              "references": [
+                "var.template.source.url",
+                "var.template.source",
+                "var.template"
+              ]
+            }
+          },
+          "schema_version": 0
+        },
+        {
+          "address": "proxmox_virtual_environment_vm.guest",
+          "mode": "managed",
+          "type": "proxmox_virtual_environment_vm",
+          "name": "guest",
+          "provider_config_key": "proxmox",
+          "expressions": {
+            "agent": [
+              {
+                "enabled": {
+                  "constant_value": true
+                },
+                "trim": {
+                  "constant_value": true
+                }
+              }
+            ],
+            "bios": {
+              "constant_value": "ovmf"
+            },
+            "cpu": [
+              {
+                "cores": {
+                  "references": [
+                    "var.guest.hardware.cores",
+                    "var.guest.hardware",
+                    "var.guest"
+                  ]
+                },
+                "type": {
+                  "references": [
+                    "var.guest.hardware.cpuType",
+                    "var.guest.hardware",
+                    "var.guest"
+                  ]
+                }
+              }
+            ],
+            "description": {
+              "references": [
+                "var.octopushy.address",
+                "var.octopushy"
+              ]
+            },
+            "disk": [
+              {
+                "datastore_id": {
+                  "references": [
+                    "local.system_disk.datastore",
+                    "local.system_disk",
+                    "local.disks_datastore"
+                  ]
+                },
+                "discard": {
+                  "constant_value": "on"
+                },
+                "import_from": {
+                  "references": [
+                    "proxmox_download_file.image.id",
+                    "proxmox_download_file.image"
+                  ]
+                },
+                "interface": {
+                  "constant_value": "scsi0"
+                },
+                "iothread": {
+                  "constant_value": true
+                },
+                "size": {
+                  "references": [
+                    "local.system_disk.size",
+                    "local.system_disk"
+                  ]
+                }
+              }
+            ],
+            "efi_disk": [
+              {
+                "datastore_id": {
+                  "references": [
+                    "local.disks_datastore"
+                  ]
+                },
+                "type": {
+                  "constant_value": "4m"
+                }
+              }
+            ],
+            "initialization": [
+              {
+                "datastore_id": {
+                  "references": [
+                    "local.disks_datastore"
+                  ]
+                },
+                "ip_config": [
+                  {
+                    "ipv4": [
+                      {
+                        "address": {
+                          "references": [
+                            "local.static_address",
+                            "var.guest.network.address",
+                            "var.guest.network",
+                            "var.guest"
+                          ]
+                        },
+                        "gateway": {
+                          "references": [
+                            "local.static_address",
+                            "var.guest.network.gateway",
+                            "var.guest.network",
+                            "var.guest"
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "user_account": [
+                  {
+                    "keys": {
+                      "references": [
+                        "var.guest.sshAuthorizedKeys",
+                        "var.guest"
+                      ]
+                    },
+                    "username": {
+                      "references": [
+                        "var.admin_user"
+                      ]
+                    }
+                  }
+                ]
+              }
+            ],
+            "machine": {
+              "constant_value": "q35"
+            },
+            "memory": [
+              {
+                "dedicated": {
+                  "references": [
+                    "var.guest.hardware.memory",
+                    "var.guest.hardware",
+                    "var.guest"
+                  ]
+                }
+              }
+            ],
+            "migrate": {
+              "constant_value": true
+            },
+            "name": {
+              "references": [
+                "var.guest.id",
+                "var.guest"
+              ]
+            },
+            "network_device": {
+              "references": [
+                "var.guest.network.bridge",
+                "var.guest.network",
+                "var.guest",
+                "var.guest.network.mac",
+                "var.guest.network",
+                "var.guest",
+                "var.guest.network.vlan",
+                "var.guest.network",
+                "var.guest"
+              ]
+            },
+            "node_name": {
+              "references": [
+                "var.guest.host",
+                "var.guest"
+              ]
+            },
+            "on_boot": {
+              "constant_value": true
+            },
+            "operating_system": [
+              {
+                "type": {
+                  "constant_value": "l26"
+                }
+              }
+            ],
+            "protection": {
+              "constant_value": true
+            },
+            "scsi_hardware": {
+              "constant_value": "virtio-scsi-single"
+            },
+            "serial_device": [
+              {}
+            ],
+            "started": {
+              "constant_value": true
+            },
+            "stop_on_destroy": {
+              "constant_value": true
+            },
+            "tags": {
+              "references": [
+                "var.octopushy.lab",
+                "var.octopushy"
+              ]
+            },
+            "vm_id": {
+              "references": [
+                "var.guest.vmid",
+                "var.guest"
+              ]
+            }
+          },
+          "schema_version": 0
+        }
+      ],
+      "variables": {
+        "admin_user": {
+          "type": "string",
+          "default": "ops",
+          "description": "The user cloud-init creates with the guest's SSH keys."
+        },
+        "guest": {
+          "type": [
+            "object",
+            {
+              "hardware": [
+                "object",
+                {
+                  "cores": "number",
+                  "cpuType": "string",
+                  "disks": [
+                    "list",
+                    [
+                      "object",
+                      {
+                        "datastore": "string",
+                        "size": "number"
+                      },
+                      [
+                        "datastore"
+                      ]
+                    ]
+                  ],
+                  "memory": "number"
+                },
+                [
+                  "cpuType"
+                ]
+              ],
+              "host": "string",
+              "id": "string",
+              "network": [
+                "object",
+                {
+                  "address": "string",
+                  "bridge": "string",
+                  "dns": [
+                    "list",
+                    "string"
+                  ],
+                  "gateway": "string",
+                  "mac": "string",
+                  "mode": "string",
+                  "vlan": "number"
+                },
+                [
+                  "address",
+                  "dns",
+                  "gateway",
+                  "mac",
+                  "mode",
+                  "vlan"
+                ]
+              ],
+              "sshAuthorizedKeys": [
+                "list",
+                "string"
+              ],
+              "vmid": "number"
+            },
+            [
+              "sshAuthorizedKeys"
+            ]
+          ],
+          "description": "The guest's identity, placement, hardware, and network from guest.yaml.",
+          "required": true
+        },
+        "host": {
+          "type": [
+            "object",
+            {
+              "datastores": [
+                "map",
+                "string"
+              ],
+              "id": "string"
+            }
+          ],
+          "description": "The Proxmox host's settings from installation.yaml.",
+          "required": true
+        },
+        "inputs": {
+          "default": {},
+          "description": "The guest's inputs from guest.yaml, which every stage of its workflow is given. This module reads none."
+        },
+        "octopushy": {
+          "type": [
+            "object",
+            {
+              "address": "string",
+              "installation": "string",
+              "lab": "string",
+              "revision": "string",
+              "stack": "string"
+            }
+          ],
+          "description": "The guest's address, its stack name, and the revision being planned.",
+          "required": true
+        },
+        "template": {
+          "type": [
+            "object",
+            {
+              "id": "string",
+              "source": [
+                "object",
+                {
+                  "checksum": "string",
+                  "checksumAlgorithm": "string",
+                  "fileName": "string",
+                  "url": "string"
+                }
+              ]
+            }
+          ],
+          "description": "The cloud image imported as the system disk.",
+          "required": true
+        }
+      }
+    }
+  },
+  "relevant_attributes": [
+    {
+      "resource": "proxmox_download_file.image",
+      "attribute": [
+        "id"
+      ]
+    },
+    {
+      "resource": "proxmox_virtual_environment_vm.guest",
+      "attribute": [
+        "mac_addresses"
+      ]
+    },
+    {
+      "resource": "proxmox_virtual_environment_vm.guest",
+      "attribute": [
+        "ipv4_addresses"
+      ]
+    },
+    {
+      "resource": "proxmox_virtual_environment_vm.guest",
+      "attribute": [
+        "vm_id"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "address": {
+        "kind": "var",
+        "name": "guest",
+        "to_display": "var.guest"
+      },
+      "status": "pass",
+      "instances": [
+        {
+          "address": {
+            "to_display": "var.guest"
+          },
+          "status": "pass"
+        }
+      ]
+    }
+  ],
+  "timestamp": "2026-11-17T13:33:13Z",
+  "errored": false
+}

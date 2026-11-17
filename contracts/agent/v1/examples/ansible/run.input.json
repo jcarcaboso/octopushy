@@ -1,0 +1,53 @@
+{
+  "image": "docker.io/skorcius/octopushy:ansible-2.21.5-7bed712c011c",
+  "root": "modules/ansible/machine-tools",
+  "action": "setup",
+  "playbook": "configure.yml",
+  "prepare": "prepare.yml",
+  "host": {
+    "name": "krb-app-01",
+    "address": "10.1.0.31",
+    "port": 22,
+    "user": "ops",
+    "hostKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4yMxTo2ZC6CYBxvdtnHHtR5HBTjQeL+w9jI3rj+PyY",
+    "hostKeyFingerprints": false
+  },
+  "vars": {
+    "machine_tools_channel": "stable"
+  },
+  "context": {
+    "address": "home/korriban/krb-app-01",
+    "commit": "6a85288183cdbc40ec08f9718ddf040f85fb2e2d",
+    "action": "setup",
+    "run": "01a1e938-23f6-7299-9689-24371b718326"
+  },
+  "guestDirectory": "labs/home/proxmox/korriban/guests/krb-app-01",
+  "outcomes": [
+    "deferred"
+  ],
+  "timeoutMinutes": 180,
+  "manifest": {
+    "commit": "6a85288183cdbc40ec08f9718ddf040f85fb2e2d",
+    "inputsHash": "b9914b3a4a03d163f1ae3bc01548939397f338b9849b79648dc86e008537a207",
+    "workflow": "machine-tools@1.0",
+    "workflowCommit": "6a85288183cdbc40ec08f9718ddf040f85fb2e2d",
+    "workflowsRepository": null,
+    "root": "modules/ansible/machine-tools",
+    "image": "docker.io/skorcius/octopushy:ansible-2.21.5-7bed712c011c",
+    "host": "ops@10.1.0.31:22",
+    "destructive": false,
+    "vars": {
+      "machine_tools_channel": "stable"
+    },
+    "secrets": {
+      "ansible.ssh-key": "proxmox/korriban/krb-app-01/ssh-key v1",
+      "ansible.var.machine_tools_token": "proxmox/korriban/krb-app-01/machine_tools_token v1"
+    },
+    "changedFiles": null
+  },
+  "secretVars": {
+    "machine_tools_token": "ansible.var.machine_tools_token"
+  },
+  "secretFiles": {},
+  "sshKey": "ansible.ssh-key"
+}

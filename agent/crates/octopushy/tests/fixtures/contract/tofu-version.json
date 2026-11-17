@@ -1,0 +1,7 @@
+{
+  "terraform_version": "1.13.1",
+  "platform": "linux_amd64",
+  "provider_selections": {
+    "registry.opentofu.org/bpg/proxmox": "0.117.0"
+  }
+}

@@ -558,13 +558,84 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
     /// state it was given unless the test passes one, as an agent always returns the state; use
     /// the overload that takes an attempt ID to report an apply without it.
     /// </summary>
-    public async Task<bool> ReportAsync(Assignment assignment, Outcome outcome, JsonObject? outputs = null, string? error = null, params Artifact[] artifacts)
+    public Task<bool> ReportAsync(Assignment assignment, Outcome outcome, JsonObject? outputs = null, string? error = null, params Artifact[] artifacts) =>
+        ReportAsync(assignment, outcome, outputs, error, checkShape: true, artifacts);
+
+    /// <summary>
+    /// Reports outputs in a shape no agent of the contract sends, which <see cref="ReportAsync(Assignment, Outcome, JsonObject?, string?, Artifact[])"/>
+    /// refuses: for a test of what the server does with an older agent's or a hostile tool's outputs.
+    /// </summary>
+    public Task<bool> ReportOffContractAsync(Assignment assignment, Outcome outcome, JsonObject outputs, string? error = null, params Artifact[] artifacts) =>
+        ReportAsync(assignment, outcome, outputs, error, checkShape: false, artifacts);
+
+    private async Task<bool> ReportAsync(Assignment assignment, Outcome outcome, JsonObject? outputs, string? error, bool checkShape, Artifact[] artifacts)
     {
         if (assignment is { Executor: "opentofu", Action: "apply" } && outcome is Outcome.Succeeded or Outcome.Failed
             && artifacts.All(a => a.Name != TofuStateStore.ArtifactName)
             && assignment.Artifacts.FirstOrDefault(a => a.Name == TofuStateStore.ArtifactName) is { } state)
             artifacts = [.. artifacts, state];
-        return await ReportAsync(assignment.AttemptId, outcome, await AsTheModuleWouldAsync(assignment, outcome, outputs), error, artifacts);
+        if (outputs is not null && checkShape)
+            CheckShape(assignment, outputs);
+        return await ReportAsync(assignment.AttemptId, outcome,
+            await AsTheModuleWouldAsync(assignment, outcome, outputs ?? ExampleOutputs(assignment, outcome), outputs), error, artifacts);
+    }
+
+    /// <summary>
+    /// Keys whose names are the user's and not the contract's: an apply's module outputs, what a prepare playbook resolved,
+    /// and the manifest the controller sent.
+    /// </summary>
+    private static readonly string[] UserKeys = ["outputs", "prepared", "manifest"];
+
+    /// <summary>
+    /// Fields executors.md names that no example holds yet; see contracts/agent/v1/examples/README.md. A test may report
+    /// them until an example does.
+    /// </summary>
+    private static readonly Dictionary<(string, string), string[]> NotYetInAnExample = new()
+    {
+        // An attribute's after is a number, a string or a list of tags, as the attribute is: its kind is not the contract's.
+        [("opentofu", "preview")] = ["changes/*/actionReason", "changes/*/targetUnknown", "changes/*/attributes/*/before",
+            "changes/*/attributes/*/after", "changes/*/attributes/*/unknown", "changes/*/attributes/*/sensitive"],
+        [("proxmox", "verify-guest")] = ["hostKeys", "hostKeysTask", "hostKeysError"],
+        [("ansible", "run")] = ["refusedKeys"],
+    };
+
+    /// <summary>
+    /// The agent's outputs for a success the test gave none for: its example in contracts/agent/v1/examples, which the
+    /// agent's tests produce from its own code. An observation stays empty: the example's lists VMs, among them the
+    /// example guest's VMID, which a test of anything else would see as taken.
+    /// </summary>
+    private static JsonObject? ExampleOutputs(Assignment assignment, Outcome outcome) =>
+        outcome == Outcome.Succeeded && assignment.Action != "observe" && ContractExamples.Exists(assignment.Executor, assignment.Action)
+            ? ContractExamples.Output(assignment.Executor, assignment.Action)
+            : null;
+
+    /// <summary>
+    /// Refuses outputs a test made up in a shape no agent reports: a key not in the action's examples, or a value of another
+    /// kind. A test may leave keys out and change values. See <see cref="ContractExamples.ShapeProblems"/>.
+    /// </summary>
+    private static void CheckShape(Assignment assignment, JsonObject outputs)
+    {
+        var (executor, action) = (assignment.Executor, assignment.Action);
+        if (!ContractExamples.Exists(executor, action))
+            return;
+        var example = ContractExamples.Output(executor, action);
+        // Each variant adds what only it has, such as a playbook's declared outcome.
+        foreach (var variant in Directory.EnumerateFiles(Path.Combine(ContractExamples.Directory, executor), $"{action}.output.*.json"))
+        {
+            foreach (var (key, value) in JsonNode.Parse(File.ReadAllText(variant))!.AsObject())
+            {
+                if (example[key] is null)
+                    example[key] = value?.DeepClone();
+            }
+        }
+
+        var free = UserKeys.Concat(NotYetInAnExample.GetValueOrDefault((executor, action), [])).ToList();
+        var reported = outputs.DeepClone().AsObject();
+        reported.Remove(NoMachine);
+        var problems = ContractExamples.ShapeProblems(example, reported, free);
+        if (problems.Count > 0)
+            throw new InvalidOperationException(
+                $"These {executor}/{action} outputs have a shape its examples in contracts/agent/v1/examples do not: {string.Join("; ", problems)}");
     }
 
     /// <summary>Plan outputs that make the guest's own machine nowhere, for a test that needs a provision plan that does not.</summary>
@@ -583,7 +654,7 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
     /// <summary>A delete, as <see cref="Plan"/> lists one, which a destroy plan of the module makes of the guest's VM.</summary>
     private static bool IsDelete(JsonNode? change) => change?["actions"] is JsonArray a && a.Any(x => x?.ToString() == "delete");
 
-    private async Task<JsonObject?> AsTheModuleWouldAsync(Assignment assignment, Outcome outcome, JsonObject? outputs)
+    private async Task<JsonObject?> AsTheModuleWouldAsync(Assignment assignment, Outcome outcome, JsonObject? outputs, JsonObject? given)
     {
         if (outcome != Outcome.Succeeded || !Guid.TryParse(assignment.AttemptId, out var attemptId))
             return outputs;
@@ -592,7 +663,7 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
         var preview = assignment is { Executor: "opentofu", Action: "preview" } && outputs?["changes"] is JsonArray listed
             && listed.All(c => c?["type"]?.ToString()?.StartsWith("proxmox_", StringComparison.Ordinal) != true)
             && listed.Any(c => IsCreate(c) || IsDelete(c));
-        var verify = assignment.Action == "verify-guest" && outputs?.ContainsKey("description") != true;
+        var verify = assignment.Action == "verify-guest" && given?.ContainsKey("description") != true;
         if (!preview && !verify)
             return outputs;
         var run = await harness.QueryAsync(db => db.Attempts.AsNoTracking().Where(a => a.Id == attemptId)
@@ -620,7 +691,8 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
         else if (verify)
         {
             outputs = outputs?.DeepClone().AsObject() ?? [];
-            outputs["node"] ??= context.Proxmox.Node;
+            if (given?["node"] is null)
+                outputs["node"] = context.Proxmox.Node;
             outputs["tags"] = new JsonArray(SafetyBoundary.OwnerTag, context.Address.Split('/')[0]);
             outputs["description"] = SafetyBoundary.OwnerDescription(context.Address);
         }
@@ -651,6 +723,9 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
             .Select(i => (JsonNode)new JsonObject
             {
                 ["address"] = $"terraform_data.r{i}",
+                ["type"] = "terraform_data",
+                ["name"] = $"r{i}",
+                ["importing"] = false,
                 ["actions"] = new JsonArray(i < create ? "create" : i < create + update ? "update" : i < create + update + delete ? "delete" : "delete", "create"),
             })
             .ToArray()),

@@ -1,0 +1,12 @@
+
+playbook: configure.yml
+
+  play #1 (all): Configure the machine	TAGS: []
+    tasks:
+      Require what prepare resolved	TAGS: []
+      Take the guest's lock	TAGS: []
+      Look for active work	TAGS: []
+      Report that work is active	TAGS: []
+      Stop without changing anything	TAGS: []
+      Record the release	TAGS: []
+      Keep the token where the tools read it	TAGS: []

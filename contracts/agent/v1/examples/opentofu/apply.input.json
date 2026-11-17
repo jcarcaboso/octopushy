@@ -1,0 +1,81 @@
+{
+  "stack": "home.korriban.krb-app-01",
+  "root": "modules/opentofu/proxmox-vm",
+  "image": "ghcr.io/opentofu/opentofu:1.13.1",
+  "timeoutMinutes": 60,
+  "variables": {
+    "host": {
+      "id": "korriban",
+      "bridges": [
+        "vmbr0"
+      ],
+      "datastores": {
+        "disks": "local-lvm",
+        "images": "local"
+      }
+    },
+    "guest": {
+      "id": "krb-app-01",
+      "host": "korriban",
+      "vmid": 310,
+      "network": {
+        "dns": [
+          "10.1.0.1"
+        ],
+        "mode": "static",
+        "bridge": "vmbr0",
+        "address": "10.1.0.31/24",
+        "gateway": "10.1.0.1"
+      },
+      "hardware": {
+        "cores": 2,
+        "disks": [
+          {
+            "size": 32
+          }
+        ],
+        "memory": 4096
+      },
+      "profiles": [],
+      "template": "fedora-44",
+      "sshAuthorizedKeys": [
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyReplaceMeWithYourOwnPublicKey00 ops@example"
+      ]
+    },
+    "inputs": {
+      "machine_tools_channel": "stable"
+    },
+    "template": {
+      "id": "fedora-44",
+      "os": "fedora",
+      "source": {
+        "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2",
+        "checksum": "28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f",
+        "fileName": "Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2",
+        "checksumAlgorithm": "sha256"
+      }
+    },
+    "octopushy": {
+      "lab": "home",
+      "stack": "home.korriban.krb-app-01",
+      "address": "home/korriban/krb-app-01",
+      "revision": "6a85288183cdbc40ec08f9718ddf040f85fb2e2d",
+      "workflow": "machine-tools@1.0",
+      "installation": "korriban"
+    },
+    "installation": {
+      "id": "korriban",
+      "type": "standalone",
+      "endpoint": "https://10.1.0.10:8006/",
+      "verifyTls": false
+    }
+  },
+  "env": {
+    "PROXMOX_VE_ENDPOINT": "https://10.1.0.10:8006/",
+    "PROXMOX_VE_INSECURE": "true"
+  },
+  "secretEnv": {
+    "PROXMOX_VE_API_TOKEN": "proxmox.token"
+  },
+  "destroy": false
+}

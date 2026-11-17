@@ -4,6 +4,7 @@
 //! outputs name it.
 
 mod common;
+mod contract;
 
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
@@ -330,6 +331,33 @@ async fn a_build_fails_when_the_server_reports_another_image() {
         "{}",
         result.error
     );
+    shutdown.cancel();
+    task.await.unwrap().unwrap();
+}
+
+/// The executor, on the input of `contracts/agent/v1/examples/nix/build.input.json`, produces the outputs of its example.
+#[tokio::test]
+async fn a_build_of_the_example_input_has_the_example_outputs() {
+    let image = b"a raw disk image".repeat(64);
+    let s = setup(&image);
+    let mut server = FakeServer::start(Options {
+        auto_ack: true,
+        ..Options::default()
+    })
+    .await;
+    let state = tempfile::tempdir().unwrap();
+    enroll_into(&server, state.path()).await;
+    let shutdown = CancellationToken::new();
+    let task = tokio::spawn(run(options(&s, state.path()), shutdown.clone()));
+    hello_executors(&mut server).await;
+    let mut assignment = build_assignment("build-example", "base-image", None);
+    assignment.input_json = contract::input("nix", "build").to_string();
+    server.send(ServerKind::Assignment(assignment)).await;
+    let (result, _) = server.wait_result("build-example").await;
+    assert_eq!(result.outcome(), Outcome::Succeeded, "{}", result.error);
+    let outputs: Value = serde_json::from_str(&result.outputs_json).unwrap();
+    // Where the store is depends on where the test runs.
+    contract::check_output("nix", "build", None, &outputs, &["outPath"]);
     shutdown.cancel();
     task.await.unwrap().unwrap();
 }

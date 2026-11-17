@@ -1,0 +1,43 @@
+{
+  "action": "setup",
+  "hostKeyFingerprints": [
+    "ssh-ed25519 SHA256:aJjpVLgJdI7bJC3m2LRC4rz0NTSEM1sIennFyfoQWgY"
+  ],
+  "manifest": {
+    "changedFiles": null,
+    "commit": "6a85288183cdbc40ec08f9718ddf040f85fb2e2d",
+    "destructive": false,
+    "host": "ops@10.1.0.31:22",
+    "image": "docker.io/skorcius/octopushy:ansible-2.21.5-7bed712c011c",
+    "inputsHash": "b9914b3a4a03d163f1ae3bc01548939397f338b9849b79648dc86e008537a207",
+    "root": "modules/ansible/machine-tools",
+    "secrets": {
+      "ansible.ssh-key": "proxmox/korriban/krb-app-01/ssh-key v1",
+      "ansible.var.machine_tools_token": "proxmox/korriban/krb-app-01/machine_tools_token v1"
+    },
+    "vars": {
+      "machine_tools_channel": "stable"
+    },
+    "workflow": "machine-tools@1.0",
+    "workflowCommit": "6a85288183cdbc40ec08f9718ddf040f85fb2e2d",
+    "workflowsRepository": null
+  },
+  "playbook": "configure.yml",
+  "prepared": {
+    "machine_tools_release": "2.0.0"
+  },
+  "schemaVersion": 1,
+  "tasks": [
+    "playbook: configure.yml",
+    "  play #1 (all): Configure the machine\tTAGS: []",
+    "    tasks:",
+    "      Require what prepare resolved\tTAGS: []",
+    "      Take the guest's lock\tTAGS: []",
+    "      Look for active work\tTAGS: []",
+    "      Report that work is active\tTAGS: []",
+    "      Stop without changing anything\tTAGS: []",
+    "      Record the release\tTAGS: []",
+    "      Keep the token where the tools read it\tTAGS: []"
+  ],
+  "toolVersion": "ansible-playbook [core 2.21.5]"
+}
