@@ -52,18 +52,37 @@ public sealed partial class RunEngine(
     IOptions<OctopushyOptions> options,
     TimeProvider clock,
     EngineHealth health,
+    SavedWrites writes,
     ILogger<RunEngine> logger)
 {
+    /// <summary>How often runs are advanced when nothing was saved: for what changes outside the database, such as a revision that could not be read.</summary>
+    internal static readonly TimeSpan FullPass = TimeSpan.FromMinutes(1);
+
     private readonly SemaphoreSlim _gate = new(1, 1);
     // Protected by _gate; discarded on rollback or failure of the enclosing operation.
     private readonly List<(Guid AgentId, Guid AttemptId)> _pendingCancellations = [];
+    // Protected by _gate. In memory only: after a start every run is advanced once.
+    private long? _advancedAtWrites;
+    private DateTimeOffset _nextFullPass;
 
-    /// <summary>One pass of the loop: expire leases, advance runs, assign queued attempts.</summary>
+    /// <summary>
+    /// One pass of the loop: expire leases, advance runs, assign queued attempts. Runs are advanced when something was
+    /// saved since they last were, and otherwise once a <see cref="FullPass"/>: advancing reads only the database, so a
+    /// run that waits, for approval, trust, credentials or another run, cannot move until something is saved.
+    /// </summary>
     public async Task TickAsync(CancellationToken cancellationToken)
     {
         var active = await WithDbAsync(async (db, _) =>
         {
             await ExpireLeasesAsync(db, cancellationToken);
+            // Read under the lock, before the runs: every save made under it has completed, and one counted later is
+            // seen by the next tick.
+            var saved = writes.Count;
+            var now = clock.GetUtcNow();
+            if (saved == _advancedAtWrites && now < _nextFullPass)
+                return [];
+            _advancedAtWrites = saved;
+            _nextFullPass = now + FullPass;
             return await db.Runs
                 .Where(r => r.Status != RunStatuses.Succeeded && r.Status != RunStatuses.Failed
                             && r.Status != RunStatuses.Cancelled && r.Status != RunStatuses.Uncertain)

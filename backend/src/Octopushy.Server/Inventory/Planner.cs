@@ -235,7 +235,8 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
                     continue;
                 }
 
-                if (guest.Setup!.Configure?.OnChange is not { } onChange)
+                // A guest that follows no value has no change of one to deliver: what its runs pinned is not read.
+                if (keys.Count == 0 || guest.Setup!.Configure?.OnChange is not { } onChange)
                     continue;
                 // What the newest run of the action actually took counts, not what was active when
                 // it was created: it pins at its first dispatch, which can follow a promotion. That
