@@ -88,6 +88,56 @@ internal static class EffectPins
         return $"taken: {taken}\n" + await PinAsync(server, runId!.Value) + "\n" + await AddedAsync(server, before);
     }
 
+    /// <summary>
+    /// What a rotation records beside <see cref="PinAsync"/>: which run verified each access key and whether it was promoted, and
+    /// every version of the guest's key in the store, which is current and which are revoked, by whom and why.
+    /// </summary>
+    public static Task<string> AccessAsync(ServerHarness server, Guid runId) =>
+        server.QueryAsync(async db =>
+        {
+            var run = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == runId);
+            var lines = new List<string>();
+            foreach (var key in await db.GuestAccessKeys.AsNoTracking().Where(k => k.ResourceId == run.ResourceId).OrderBy(k => k.Version).ToListAsync())
+            {
+                lines.Add($"access key v{key.Version}: verified by {(key.VerifiedRunId is null ? "-" : key.VerifiedRunId == run.Id ? "this run" : "another")}"
+                    + $" | promoted {key.PromotedAt is not null} | bootstrap {key.Bootstrap}");
+            }
+
+            var name = Octopushy.Server.Store.GuestAccessCredentials.Key(run.ResourceId);
+            var entry = await db.StoreEntries.AsNoTracking().SingleOrDefaultAsync(e => e.Key == name);
+            lines.Add(entry is null ? "store: none" : $"store: current v{entry.CurrentVersion} | latest v{entry.LatestVersion}");
+            foreach (var version in await db.StoreVersions.AsNoTracking().Where(v => v.Key == name).OrderBy(v => v.Version).ToListAsync())
+            {
+                lines.Add($"store v{version.Version}: activated {version.ActivatedAt is not null} | revoked {version.RevokedAt is not null}"
+                    + $" by {version.RevokedBy ?? "-"} | {version.RevocationNote ?? "-"}");
+            }
+
+            return string.Join("\n", lines);
+        });
+
+    /// <summary>Every time a rotation's effects set, exactly, to tell a second delivery that wrote them again.</summary>
+    public static Task<string> AccessTimesAsync(ServerHarness server, Guid resourceId) =>
+        server.QueryAsync(async db =>
+        {
+            var lines = new List<string>();
+            foreach (var key in await db.GuestAccessKeys.AsNoTracking().Where(k => k.ResourceId == resourceId).OrderBy(k => k.Version).ToListAsync())
+                lines.Add($"v{key.Version}: authorized {Time(key.AuthorizedAt)} | verified {Time(key.VerifiedAt)} | removed {Time(key.RemovedAt)}");
+            var name = Octopushy.Server.Store.GuestAccessCredentials.Key(resourceId);
+            foreach (var version in await db.StoreVersions.AsNoTracking().Where(v => v.Key == name).OrderBy(v => v.Version).ToListAsync())
+                lines.Add($"store v{version.Version}: revoked {Time(version.RevokedAt)}");
+            return string.Join("\n", lines);
+            static string Time(DateTimeOffset? time) => time?.ToString("O") ?? "-";
+        });
+
+    /// <summary><see cref="DeliverAsync"/>, followed by <see cref="AccessAsync"/>.</summary>
+    public static async Task<string> DeliverWithAccessAsync(ServerHarness server, FakeAgent agent, Assignment assignment, Outcome outcome, JsonObject? outputs,
+        string? error = null)
+    {
+        var pinned = await DeliverAsync(server, agent, assignment, outcome, outputs, error);
+        var runId = await server.QueryAsync(db => db.Attempts.AsNoTracking().Where(a => a.Id == Guid.Parse(assignment.AttemptId)).Select(a => a.RunId).SingleAsync());
+        return pinned + "\n" + await AccessAsync(server, runId!.Value);
+    }
+
     /// <summary>A change id is new in every test.</summary>
     private static string Mask(string? text) =>
         text is null ? "-" : System.Text.RegularExpressions.Regex.Replace(text, "change [0-9a-f-]{36}", "change <id>");
