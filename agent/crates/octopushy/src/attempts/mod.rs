@@ -415,9 +415,28 @@ impl AttemptManager {
             ),
             Err(_) => failed(&id, "internal error: the executor panicked"),
         };
+        // A process of the tool's user outlived a run: whatever the executor says, what the tool
+        // left can be anything that process made it, so nothing of it is reported. A change that
+        // may have run is uncertain, never retried, and comes back with no state, as an apply
+        // that returns none is; a read failed.
+        let tainted = lease.as_ref().is_some_and(|l| l.tainted());
+        if tainted {
+            let why = "a process of the tool's user outlived a tool run, so nothing the tool \
+                       left was read or reported; the user is quarantined";
+            res = if mutating {
+                result(
+                    &id,
+                    Outcome::Uncertain,
+                    &format!("{why}. Inspect the target before planning again"),
+                )
+            } else {
+                failed(&id, why)
+            };
+            log.agent(why);
+        }
         res.error = log.mask(&res.error);
-        // Whatever the outcome, the state records what the apply did.
-        if executor == "opentofu" && action == "apply" {
+        // Whatever the outcome, the state records what the apply did, unless it cannot be trusted.
+        if executor == "opentofu" && action == "apply" && !tainted {
             res.artifacts.extend(state::read(&ctx.workspace));
         }
         // Nothing of the user's outlives the attempt, and the next attempt it runs for cannot

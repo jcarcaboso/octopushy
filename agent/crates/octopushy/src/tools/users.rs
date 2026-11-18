@@ -34,6 +34,7 @@ use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -41,6 +42,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use tokio::process::Command;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
+
+use super::dirfd::{self, Dir};
 
 /// The names of the pool's users, followed by 0, 1, 2, ...
 pub const POOL_PREFIX: &str = "octopushy-tool-";
@@ -841,103 +844,115 @@ fn lchown(path: &Path, uid: u32, gid: u32) -> io::Result<()> {
 
 /// Makes a workspace this user's to work in, before its tool runs. The workspace itself and
 /// [`AGENT_OWNED`] entries stay root's, readable by the user's group; every other entry the agent
-/// made becomes the user's. An entry already the user's is left as the tool left it, and
-/// nothing is followed: a link is changed itself, never what it names. A file of root's with
-/// more than one link is not handed over: it may be a link to a file of the agent's.
+/// made becomes the user's. An entry already the user's is left as the tool left it. The walk is
+/// by descriptor and follows no link: a link is changed itself, never what it names, and a
+/// directory swapped for a link fails the walk. A file of root's with more than one link is not
+/// handed over: it may be a link to a file of the agent's.
 pub fn hand_over(ws: &Path, user: ToolUser) -> Result<()> {
-    let meta = fs::symlink_metadata(ws)?;
-    if !meta.is_dir() || meta.uid() != 0 {
+    let root = Rc::new(Dir::open(ws).with_context(|| format!("opening {}", ws.display()))?);
+    let meta = root.stat()?;
+    if !meta.is_dir() || meta.uid != 0 {
         bail!("{} is not a workspace of the agent's", ws.display());
     }
-    lchown(ws, 0, user.gid)?;
-    fs::set_permissions(ws, fs::Permissions::from_mode(0o750))?;
-    for entry in fs::read_dir(ws)? {
-        let entry = entry?;
-        let path = entry.path();
-        let name = entry.file_name();
+    root.chown(0, user.gid)?;
+    root.chmod(0o750)?;
+    for name in root.entries()? {
+        let shown = || format!("{}/{}", ws.display(), name.to_string_lossy());
         if name.as_bytes() == crate::attempts::workspace::MARKER.as_bytes() {
-            lchown(&path, 0, 0)?;
-            continue;
+            root.chown_at_if(&name, 0, 0, |_| true)
+                .with_context(shown)?;
+        } else if AGENT_OWNED.iter().any(|a| a.as_bytes() == name.as_bytes()) {
+            agent_readable(&root, &name, user.gid).with_context(shown)?;
+        } else {
+            give(&root, &name, user).with_context(shown)?;
         }
-        if AGENT_OWNED.iter().any(|a| a.as_bytes() == name.as_bytes()) {
-            walk(&path, &mut |p, m| {
-                if m.file_type().is_symlink() {
-                    return Ok(());
-                }
-                lchown(p, 0, user.gid)?;
-                let mode = if m.is_dir() { 0o750 } else { 0o640 };
-                fs::set_permissions(p, fs::Permissions::from_mode(mode))
-            })?;
-            continue;
-        }
-        walk(&path, &mut |p, m| {
-            if m.uid() == 0 && (m.is_dir() || m.nlink() == 1) {
-                lchown(p, user.uid, user.gid)?;
-            }
-            Ok(())
+    }
+    Ok(())
+}
+
+/// Hands `name` and what is below it over to `user`: whatever of it is root's, apart from files
+/// with another link.
+fn give(parent: &Rc<Dir>, name: &CStr, user: ToolUser) -> io::Result<()> {
+    let mut stack = vec![(parent.clone(), name.to_owned())];
+    while let Some((dir, name)) = stack.pop() {
+        let entry = dir.stat_at(&name)?;
+        dir.chown_at_if(&name, user.uid, user.gid, |e| {
+            e.uid == 0 && (e.is_dir() || e.nlink == 1)
         })?;
-    }
-    Ok(())
-}
-
-/// Takes a workspace back from its user: it can no longer enter it.
-pub fn reclaim(ws: &Path) -> Result<()> {
-    match fs::symlink_metadata(ws) {
-        Ok(m) if m.is_dir() => {
-            lchown(ws, 0, 0)?;
-            fs::set_permissions(ws, fs::Permissions::from_mode(0o700))?;
-            Ok(())
-        }
-        Ok(_) => bail!("{} is not a directory", ws.display()),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.into()),
-    }
-}
-
-/// Calls `f` on `path` and, below a directory that is not a link, on everything in it, parents
-/// first. Without recursion: a tool can nest directories as deep as it likes.
-fn walk(path: &Path, f: &mut dyn FnMut(&Path, &fs::Metadata) -> io::Result<()>) -> Result<()> {
-    let mut stack = vec![path.to_path_buf()];
-    while let Some(path) = stack.pop() {
-        let meta = fs::symlink_metadata(&path)?;
-        f(&path, &meta).with_context(|| format!("changing the owner of {}", path.display()))?;
-        if meta.is_dir() {
-            for entry in fs::read_dir(&path)? {
-                stack.push(entry?.path());
+        if entry.is_dir() {
+            let sub = Rc::new(dir.open_at(&name)?);
+            for child in sub.entries()? {
+                stack.push((sub.clone(), child));
             }
         }
     }
     Ok(())
 }
 
-/// Removes everything `uid` owns in `dirs`, at any depth, without following links, apart from
-/// what is in `kept`. `Ok` only when the whole of `dirs` was looked at and each of the user's
-/// entries removed: looking at more than `limit` entries, a folder that cannot be read, or an
-/// entry that cannot be removed is an error, and the user is not clean. Another user's entries
-/// count toward `limit` too: a folder of another user's can hold this one's files, so the sweep
-/// cannot skip it.
+/// Makes `name`, a tree only the agent writes to, readable by the user's group and nobody else.
+fn agent_readable(parent: &Rc<Dir>, name: &CStr, gid: u32) -> io::Result<()> {
+    let mut stack = vec![(parent.clone(), name.to_owned())];
+    while let Some((dir, name)) = stack.pop() {
+        let entry = dir.stat_at(&name)?;
+        if entry.is_symlink() {
+            continue;
+        }
+        if entry.is_dir() {
+            let sub = Rc::new(dir.open_at(&name)?);
+            sub.chown(0, gid)?;
+            sub.chmod(0o750)?;
+            for child in sub.entries()? {
+                stack.push((sub.clone(), child));
+            }
+        } else if entry.is_file() {
+            dir.chown_at_if(&name, 0, gid, |e| e.is_file())?;
+            dir.chmod_file_at(&name, 0o640)?;
+        }
+    }
+    Ok(())
+}
+
+/// Takes a workspace back from its user: it can no longer enter it. By descriptor, following no
+/// link.
+pub fn reclaim(ws: &Path) -> Result<()> {
+    let dir = match Dir::open(ws) {
+        Ok(dir) => dir,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e).with_context(|| format!("opening {}", ws.display())),
+    };
+    dir.chown(0, 0)?;
+    dir.chmod(0o700)?;
+    Ok(())
+}
+
+/// Removes everything `uid` owns in `dirs`, at any depth, by descriptor and without following
+/// links, apart from what is in `kept`. `Ok` only when the whole of `dirs` was looked at and
+/// each of the user's entries removed: looking at more than `limit` entries, a folder that cannot
+/// be read, or an entry that cannot be removed is an error, and the user is not clean. Another
+/// user's entries count toward `limit` too: a folder of another user's can hold this one's files,
+/// so the sweep cannot skip it.
 pub fn sweep(dirs: &[PathBuf], kept: &[PathBuf], uid: u32, limit: usize) -> Result<(), String> {
     let vanished = |e: &io::Error| e.kind() == io::ErrorKind::NotFound;
     let mut seen = 0usize;
     let mut failures = Vec::new();
-    let mut stack: Vec<PathBuf> = dirs.to_vec();
-    while let Some(dir) = stack.pop() {
-        let entries = match fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(e) if vanished(&e) => continue,
+    // (the directory, its path, for messages and `kept`)
+    let mut stack: Vec<(Rc<Dir>, PathBuf)> = Vec::new();
+    for top in dirs {
+        match Dir::open(top) {
+            Ok(dir) => stack.push((Rc::new(dir), top.clone())),
+            Err(e) if vanished(&e) => {}
+            Err(e) => failures.push(format!("cannot open {}: {e}", top.display())),
+        }
+    }
+    while let Some((dir, path)) = stack.pop() {
+        let names = match dir.entries() {
+            Ok(names) => names,
             Err(e) => {
-                failures.push(format!("cannot read {}: {e}", dir.display()));
+                failures.push(format!("cannot read {}: {e}", path.display()));
                 continue;
             }
         };
-        for entry in entries {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(e) => {
-                    failures.push(format!("cannot read {}: {e}", dir.display()));
-                    break;
-                }
-            };
+        for name in names {
             seen += 1;
             if seen > limit {
                 return Err(format!(
@@ -945,34 +960,28 @@ pub fn sweep(dirs: &[PathBuf], kept: &[PathBuf], uid: u32, limit: usize) -> Resu
                      looked at for what the user left"
                 ));
             }
-            let path = entry.path();
-            if kept.contains(&path) {
+            let child = path.join(std::ffi::OsStr::from_bytes(name.as_bytes()));
+            if kept.contains(&child) {
                 continue;
             }
-            let meta = match fs::symlink_metadata(&path) {
-                Ok(meta) => meta,
+            let entry = match dir.stat_at(&name) {
+                Ok(entry) => entry,
                 Err(e) if vanished(&e) => continue,
                 Err(e) => {
-                    failures.push(format!("cannot look at {}: {e}", path.display()));
+                    failures.push(format!("cannot look at {}: {e}", child.display()));
                     continue;
                 }
             };
-            if meta.uid() != uid {
-                if meta.is_dir() {
-                    stack.push(path);
+            if entry.uid == uid {
+                if let Err(e) = dirfd::remove_tree_at(&dir, &name) {
+                    failures.push(format!("cannot remove {}: {e}", child.display()));
                 }
-                continue;
-            }
-            let removed = if meta.is_dir() {
-                fs::remove_dir_all(&path)
-            } else {
-                fs::remove_file(&path)
-            };
-            match removed {
-                Err(e) if !vanished(&e) => {
-                    failures.push(format!("cannot remove {}: {e}", path.display()))
+            } else if entry.is_dir() {
+                match dir.open_at(&name) {
+                    Ok(sub) => stack.push((Rc::new(sub), child)),
+                    Err(e) if vanished(&e) => {}
+                    Err(e) => failures.push(format!("cannot open {}: {e}", child.display())),
                 }
-                _ => {}
             }
         }
     }

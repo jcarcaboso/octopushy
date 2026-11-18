@@ -13,6 +13,7 @@
 //! [`ToolRuntime::remove_leftovers`] removes what a killed agent left, and nothing of
 //! another agent's sharing the runtime.
 
+mod dirfd;
 mod lines;
 pub mod users;
 
@@ -664,6 +665,10 @@ impl ToolRuntime {
         // Only a user the pool leased: `command` refused anything else.
         let user = inv.user.filter(|_| !self.is_container());
         if let Some(user) = user {
+            // A process of the user outlived an earlier run: nothing of the attempt goes on.
+            if self.tainted(user) {
+                bail!("{SURVIVED}; no other tool runs in this attempt");
+            }
             let ws = inv.workspace.to_path_buf();
             tokio::task::spawn_blocking(move || users::hand_over(&ws, user))
                 .await
@@ -750,9 +755,15 @@ impl ToolRuntime {
             }
         };
         // The tool has ended, and nothing it started outlives it: the agent then reads what it
-        // left, and writes beside it, with no process of the user's still changing it.
-        if let Some(user) = user {
-            kill_user(user).await;
+        // left, and writes beside it, with no process of the user's still changing it. If one
+        // does, the run ends here: nothing it left is read, nothing written beside it.
+        if let Some(user) = user
+            && !self.kill_user(user).await
+        {
+            out_task.abort();
+            err_task.abort();
+            log.agent(SURVIVED);
+            bail!("{SURVIVED}; nothing the tool left is read, and no other tool runs");
         }
         // Something the tool left behind can hold its pipes open after it exits, so the limit
         // has to keep applying until the output has ended. What was read by then decides nothing:
@@ -780,6 +791,12 @@ impl ToolRuntime {
             Some(result) => result.context("stderr reader")?,
             None => Default::default(),
         };
+        // A stop whose kill did not take every process of the user.
+        if let Some(user) = user
+            && self.tainted(user)
+        {
+            bail!("{SURVIVED}; nothing the tool left is read, and no other tool runs");
+        }
         Ok(ToolOutput {
             code: status.code(),
             stdout,
@@ -868,26 +885,36 @@ impl ToolRuntime {
             }
         }
         if let Some(user) = user {
-            kill_user(user).await;
+            self.kill_user(user).await;
         }
     }
-}
 
-/// Kills every process of `user`, off the async threads.
-async fn kill_user(user: ToolUser) {
-    let killed = tokio::task::spawn_blocking(move || users::kill_all(user, KILL_USER_TIMEOUT))
-        .await
-        .unwrap_or(false);
-    if !killed {
-        tracing::error!(
-            uid = user.uid,
-            "processes of the tool's user survive SIGKILL"
-        );
+    /// Kills every process of `user`, off the async threads. When one survives, or `/proc`
+    /// cannot tell, the user is tainted: no other tool of the attempt runs, the attempt is not a
+    /// success, and its release quarantines the user. True when none is left.
+    async fn kill_user(&self, user: ToolUser) -> bool {
+        let Some(pool) = self.users.clone() else {
+            return true;
+        };
+        let timeout = pool.kill_timeout();
+        let killed = tokio::task::spawn_blocking(move || users::kill_all(user, timeout))
+            .await
+            .unwrap_or(false);
+        if !killed {
+            pool.taint(user.uid);
+            tracing::error!(uid = user.uid, "{SURVIVED}");
+        }
+        killed
+    }
+
+    fn tainted(&self, user: ToolUser) -> bool {
+        self.users.as_ref().is_some_and(|p| p.is_tainted(user.uid))
     }
 }
 
-/// How long the processes of a tool's user may take to die.
-const KILL_USER_TIMEOUT: Duration = Duration::from_secs(30);
+/// Why an attempt stops when a process of its tool's user cannot be killed.
+const SURVIVED: &str = "a process of the tool's user survived SIGKILL, so what the tool left \
+                        cannot be trusted";
 
 /// Whether `image` is named by digest: `name[:tag]@sha256:<64 lowercase hex>`.
 pub fn is_pinned(image: &str) -> bool {

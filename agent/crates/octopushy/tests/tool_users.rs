@@ -42,6 +42,7 @@ case "$1" in
     [ -z "$2" ] && { echo "OpenTofu uid=$(id -u)"; exit 0; }
     echo '{"terraform_version":"1.13.1"}' ;;
   init)
+    if [ -n "${TF_VAR_stall:-}" ] && [ "$TF_VAR_stall" = init ]; then echo "stalling as $(id -u)"; sleep 3; fi
     if [ -n "${TF_VAR_detach:-}" ]; then "$TF_VAR_detach"; sleep 0.5; survivors; fi
     if [ -n "${TF_VAR_survivors:-}" ]; then survivors; echo "ids $(id -u)"; fi
     echo "initialized" ;;
@@ -73,6 +74,11 @@ case "$1" in
       echo left > "/tmp/octopushy-test-left-$(id -u)"
     fi
     exit 0 ;;
+  apply)
+    if [ "${TF_VAR_stall:-}" = apply ]; then echo "stalling as $(id -u)"; sleep 3; fi
+    echo '{"version":4,"serial":1,"lineage":"l","resources":[]}' > "$(dirname "$PWD")/state/terraform.tfstate" 2>/dev/null
+    echo "applied" ;;
+  output) echo '{}' ;;
   *) echo "unknown $1" >&2; exit 1 ;;
 esac
 "#;
@@ -127,6 +133,7 @@ fn agent(max: u32) -> Agent {
     let pool = Arc::new(UserPool::discover(&store).unwrap());
     // As `agent run` does: the agent's own directories, here under /tmp, are never swept.
     pool.keep_out_of_sweeps([state.clone(), work.clone(), store.clone(), bin.clone()]);
+    pool.set_kill_timeout(Duration::from_secs(2));
     assert_eq!(pool.nix_user().map(|u| u.uid), Some(NIX_UID));
     let nix_cache = state.join("cache/nix");
     users::secure_state(&state, &work, Some((&nix_cache, pool.nix_user().unwrap()))).unwrap();
@@ -209,7 +216,6 @@ async fn run_until_done(
     (logs, results)
 }
 
-/// Processes, not zombies, whose real, effective, saved or file system user is `uid`.
 /// Threads, not zombies, whose real, effective, saved or file system user is `uid`. Every thread
 /// of every process: a thread group whose leader has exited shows a zombie leader while its
 /// other threads run.
@@ -602,4 +608,142 @@ async fn a_user_whose_sweep_another_user_exhausts_is_not_leased_with_its_files()
         lease.release(&gone).await;
     }
     assert!(pool.quarantined().is_empty());
+}
+
+/// Becomes a process `/proc` shows as the given user's that the user cannot signal: real and saved
+/// user nobody, effective user the one given. The kill a cleanup makes as that user fails on it,
+/// as on a process that cannot be killed.
+const STUCK_C: &str = r#"
+#define _GNU_SOURCE
+#include <stdlib.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    uid_t uid = (uid_t)atoi(argv[1]);
+    if (argc != 2 || setresgid(65534, 65534, 65534) || setresuid(65534, uid, 65534)) return 1;
+    for (;;) pause();
+}
+"#;
+
+fn compile(dir: &Path, name: &str, source: &str) -> PathBuf {
+    let c = dir.join(format!("{name}.c"));
+    let program = dir.join("bin").join(name);
+    std::fs::write(&c, source).unwrap();
+    let built = std::process::Command::new("cc")
+        .args(["-pthread", "-o"])
+        .arg(&program)
+        .arg(&c)
+        .status()
+        .unwrap();
+    assert!(built.success(), "cc {name} failed");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    program
+}
+
+/// Waits for the attempt's tool to say which user it stalls as, then leaves a process of that
+/// user's which the user cannot kill. Returns the user and the process.
+async fn stall(
+    agent: &Agent,
+    stuck: &Path,
+    cursor: &mut SessionCursor,
+    id: &str,
+) -> (u32, std::process::Child) {
+    let uid = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            for message in agent.manager.collect(cursor) {
+                if let Some(Kind::Log(log)) = message.kind
+                    && log.attempt_id == id
+                {
+                    for line in log.lines {
+                        if let Some(uid) = line.text.strip_prefix("stalling as ") {
+                            return uid.trim().parse::<u32>().unwrap();
+                        }
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the tool stalls");
+    let child = std::process::Command::new(stuck)
+        .arg(uid.to_string())
+        .spawn()
+        .unwrap();
+    (uid, child)
+}
+
+#[tokio::test]
+#[ignore = "needs root and the tool users: tests/tool-users/run.sh"]
+async fn a_survivor_that_cannot_be_killed_stops_the_attempt() {
+    let agent = agent(2);
+    let stuck = compile(agent.state.parent().unwrap(), "stuck", STUCK_C);
+
+    // A read: the survivor appears during init, so plan never runs, and the preview fails.
+    agent
+        .manager
+        .accept(preview("s1", json!({ "TF_VAR_stall": "init" })));
+    let mut cursor = SessionCursor::default();
+    let (uid1, mut stuck1) = stall(&agent, &stuck, &mut cursor, "s1").await;
+    let (logs, results) = run_until_done(&agent, &["s1"]).await;
+    let log = logs.get("s1").map(|l| l.join("\n")).unwrap_or_default();
+    let r = &results[0];
+    assert_eq!(r.outcome(), Outcome::Failed, "{r:?}");
+    assert!(r.error.contains("outlived a tool run"), "{}", r.error);
+    assert!(
+        !log.contains("$ tofu plan"),
+        "a tool ran after the survivor: {log}"
+    );
+    assert!(
+        agent
+            .exec
+            .runtime
+            .users
+            .as_ref()
+            .unwrap()
+            .quarantined()
+            .contains(&uid1)
+    );
+
+    // A change: the survivor appears during apply, so output never runs, and the apply is
+    // uncertain, with no state.
+    let plan = archive::pack(&[("plan.bin", b"PLAN".as_slice())]).unwrap();
+    let mut apply = preview("s2", json!({ "TF_VAR_stall": "apply" }));
+    apply.action = "apply".into();
+    apply.artifacts = vec![octopushy_proto::v1::Artifact {
+        name: "plan.tar.gz".into(),
+        sha256: octopushy::tls::sha256_hex(&plan),
+        content: plan,
+    }];
+    agent.manager.accept(apply);
+    let mut cursor = SessionCursor::default();
+    let (uid2, mut stuck2) = stall(&agent, &stuck, &mut cursor, "s2").await;
+    assert_ne!(uid2, uid1, "a quarantined user ran another attempt");
+    let (logs, results) = run_until_done(&agent, &["s2"]).await;
+    let log = logs.get("s2").map(|l| l.join("\n")).unwrap_or_default();
+    let r = &results[0];
+    assert_eq!(r.outcome(), Outcome::Uncertain, "{r:?}");
+    assert!(
+        r.artifacts.is_empty(),
+        "state reported from an untrusted apply: {:?}",
+        r.artifacts
+    );
+    assert!(
+        !log.contains("$ tofu output"),
+        "a tool ran after the survivor: {log}"
+    );
+    assert!(
+        agent
+            .exec
+            .runtime
+            .users
+            .as_ref()
+            .unwrap()
+            .quarantined()
+            .contains(&uid2)
+    );
+
+    for child in [&mut stuck1, &mut stuck2] {
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
 }
