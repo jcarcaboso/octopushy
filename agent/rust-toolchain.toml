@@ -1,0 +1,6 @@
+# The Rust toolchain for the agent: CI installs it, and agent/Containerfile builds with the image
+# of the same version (scripts/checks/toolchains.sh checks they agree). No components here: the
+# image has none, and listing them would make the image build download them. CI adds rustfmt
+# and clippy itself.
+[toolchain]
+channel = "1.98.1"

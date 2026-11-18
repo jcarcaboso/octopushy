@@ -267,10 +267,10 @@ as on the first start) and any other agent, and trust each installation again. T
 snapshot (`pct rollback <ctid> octopushy-<time> --start 1`, then
 `pct exec <ctid> -- octopushy-compose up -d`) rather than starting older images.
 
-To make a release: set the new version in `backend/Directory.Build.props`,
-`frontend/package.json`, `agent/Cargo.toml`, and the default in `install.sh`, tag that
-commit `v<version>`, and push the tag. The workflow publishes `backend-<version>`,
-`frontend-<version>`, and `agent-<version>`.
+To make a release: run `just release <version>`, which sets the version in every file that
+carries it (`scripts/release.sh` lists them), write the release notes in the top README, tag that
+commit `v<version>`, and push the tag. The workflow checks that the tag matches those files, then
+publishes `backend-<version>`, `frontend-<version>`, and `agent-<version>`.
 
 ## Service icons
 
