@@ -232,6 +232,8 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
     {
         await using var setup = await StartAsync(Lab());
         var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
+        // Not the only agent, so the runner is asked where it reaches.
+        await WorkerRoutingTests.OfflineSpareAsync(setup.Server);
         await ProvisionAsync(setup, runner);
         var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
         await setup.ReportVersionAsync(worker.Id, "0.0.1");

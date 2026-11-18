@@ -178,6 +178,27 @@ public class ConfigureRunTests(PostgresFixture postgres) : IClassFixture<Postgre
     }
 
     [Fact]
+    public async Task The_only_agent_left_still_never_configures_the_guest_it_runs_on()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        var worker = await server.ConnectAgentFromAsync(IPAddress.Parse("10.1.0.31"), "krb-app-01", "home");
+        server.Services.GetRequiredService<AgentConnections>().Disconnect(agent.Id);
+        // Disabled, the other agent can never take work: the guest's own agent is the only one, and still does not get it.
+        await server.WithDbAsync(db => db.Agents.Where(a => a.Id == agent.Id).ExecuteUpdateAsync(u => u.SetProperty(a => a.Disabled, true)));
+
+        await ScheduleAsync(server);
+        await PreviewAsync(worker);
+        await server.TickAsync();
+        Assert.DoesNotContain(worker.TakeAssignments(), a => a.Action == "run");
+        var run = await server.LatestRunAsync(Guest, Operations.Configure);
+        var playbook = run.Steps.Single(s => s.Name == StepNames.Playbook).Attempts.Single();
+        Assert.Equal(AttemptStatuses.Queued, playbook.Status);
+        Assert.Contains("krb-app-01: runs on ssh://10.1.0.31:22, the guest this step configures", playbook.WaitingReason);
+    }
+
+    [Fact]
     public async Task A_change_whose_agent_never_reports_can_be_force_stopped_and_closed()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());

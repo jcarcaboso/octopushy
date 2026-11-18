@@ -128,7 +128,19 @@ public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string
     public ChannelReader<ServerMessage> Outbound => _outbound.Reader;
 
     /// <summary>Nonblocking hand-off, so credential revocation can serialize with dispatch.</summary>
-    public bool TrySend(ServerMessage message) => _outbound.Writer.TryWrite(message);
+    public bool TrySend(ServerMessage message)
+    {
+        if (AttemptOf(message) is not { } attempt)
+            return _outbound.Writer.TryWrite(message);
+        // Queued and noted as not yet written in one step: its write cannot begin in between.
+        lock (_writing)
+        {
+            if (!_outbound.Writer.TryWrite(message))
+                return false;
+            _unwritten.Add(attempt);
+            return true;
+        }
+    }
 
     public async Task<bool> SendAsync(ServerMessage message, CancellationToken cancellationToken)
     {
@@ -145,7 +157,92 @@ public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string
         }
     }
 
-    public void Close() => _outbound.Writer.TryComplete();
+    // What has been written and what never was: a message is written only once BeginWrite let it through, under this lock,
+    // while the session was open; Close and a cancelled call shut that door under the same lock.
+    private readonly Lock _writing = new();
+    private bool _closed;
+    private bool _reported;
+    private readonly List<Guid> _skipped = [];
+    private readonly HashSet<Guid> _unwritten = [];
+
+    /// <summary>
+    /// Writes what is queued, in order, until the session closes or <paramref name="cancellationToken"/> is cancelled. A message
+    /// taken off the queue once either happened is not written, and is reported by <see cref="TakeUnwritten"/>.
+    /// </summary>
+    public async Task WriteAllAsync(Func<ServerMessage, Task> write, CancellationToken cancellationToken)
+    {
+        while (await _outbound.Reader.WaitToReadAsync(cancellationToken))
+        {
+            while (_outbound.Reader.TryRead(out var message))
+            {
+                if (!BeginWrite(message, cancellationToken))
+                    return;
+                await write(message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The one boundary between a message that may have left this process and one that certainly did not. True: its write
+    /// begins, and from here on whether the agent has it is unknown. False: the session was closed or the call cancelled first,
+    /// nothing of it is written, and so neither is anything queued after it.
+    /// </summary>
+    private bool BeginWrite(ServerMessage message, CancellationToken cancellationToken)
+    {
+        lock (_writing)
+        {
+            if (!_closed && !cancellationToken.IsCancellationRequested)
+            {
+                if (AttemptOf(message) is { } begun)
+                    _unwritten.Remove(begun);
+                return true;
+            }
+            _closed = true;
+            if (AttemptOf(message) is { } attempt)
+                _skipped.Add(attempt);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Whether the write of an attempt's assignment handed to this session has begun. False while it waits on the queue and
+    /// for one this session never wrote, which <see cref="TakeUnwritten"/> reports once the session has closed.
+    /// </summary>
+    public bool WriteBegan(Guid attemptId)
+    {
+        lock (_writing)
+            return !_unwritten.Contains(attemptId);
+    }
+
+    public void Close()
+    {
+        lock (_writing)
+            _closed = true;
+        _outbound.Writer.TryComplete();
+    }
+
+    /// <summary>
+    /// The attempts whose assignment this session never began to write: taken off the queue after it closed, or still on it.
+    /// Once, for the caller that ran <see cref="WriteAllAsync"/> and has seen it end; empty for every later call and while the
+    /// session is open.
+    /// </summary>
+    public IReadOnlyList<Guid> TakeUnwritten()
+    {
+        lock (_writing)
+        {
+            if (!_closed || _reported)
+                return [];
+            _reported = true;
+            var unwritten = new List<Guid>(_skipped);
+            while (_outbound.Reader.TryRead(out var message))
+                if (AttemptOf(message) is { } attempt)
+                    unwritten.Add(attempt);
+            return unwritten;
+        }
+    }
+
+    private static Guid? AttemptOf(ServerMessage message) =>
+        message.Assignment is { } assignment && Guid.TryParse(assignment.AttemptId, out var id) ? id : null;
 }
 
 /// <summary>The agents connected to this server right now.</summary>

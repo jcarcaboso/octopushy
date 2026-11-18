@@ -3,7 +3,7 @@
 An agent at one site may reach endpoints that an agent at another site cannot. The controller does not need to be
 told which agent reaches what. Before it hands out work that connects somewhere, it asks the connected agents
 whether they reach that endpoint, from the same place the step will connect from. It then hands the work only to an
-agent with fresh evidence that it does. Labels are no longer needed for this, and no per-target agent mapping
+agent with fresh evidence that it does, unless only one agent could take it. Labels are no longer needed for this, and no per-target agent mapping
 exists to keep up to date.
 
 The controller is still the only scheduler. Agents answer probes the controller sends, and never claim, bid on,
@@ -58,6 +58,10 @@ reachability.
 
 ## When probes are sent
 
+- **Not for the only agent.** Evidence chooses between agents. When exactly one enrolled agent that is not
+  disabled has the labels the work requires, connected or not and whatever it offers now, it gets the work
+  without evidence and is not probed for it, unless it runs on the guest the step configures (below). An
+  unreachable endpoint then fails the step instead of making it wait.
 - **On demand.** At dispatch, a queued attempt whose candidates lack current evidence causes one probe per
   candidate and endpoint, deduplicated while one is outstanding. The attempt's waiting reason says why it waits,
   for example `A: … timeout 40s ago (…); next probe in 20s; B: … probing`, or `old: update the agent to report

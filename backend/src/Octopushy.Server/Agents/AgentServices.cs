@@ -130,10 +130,10 @@ public sealed class AgentChannelService(
         var handler = Task.CompletedTask;
         try
         {
-            await engine.OnHelloAsync(agent.Id, hello, call.Token);
-            // Registered under the engine's gate together with its offer: a connection it replaces may have stored its own
-            // since the Hello's, and stores nothing once this one is the agent's.
-            await engine.RegisterAsync(session, () => connections.Add(session), call.Token);
+            // Its Hello is settled and it is registered in one step under the engine's gate, together with its offer: a
+            // connection it replaces is closed before anything is dispatched again, may have stored its own offer since the
+            // Hello's, and stores nothing once this one is the agent's.
+            await engine.RegisterAsync(session, hello, () => connections.Add(session), call.Token);
             reachability.OnConnected(session);
             logger.LogInformation("Agent {Name} ({Agent}) connected, version {Version}.", agent.Name, agent.Id, hello.AgentVersion);
             await responseStream.WriteAsync(new ServerMessage
@@ -159,10 +159,7 @@ public sealed class AgentChannelService(
             {
                 try
                 {
-                    await foreach (var message in session.Outbound.ReadAllAsync(call.Token))
-                    {
-                        await responseStream.WriteAsync(message, call.Token);
-                    }
+                    await session.WriteAllAsync(message => responseStream.WriteAsync(message, call.Token), call.Token);
                 }
                 catch (OperationCanceledException)
                 {
@@ -303,6 +300,18 @@ public sealed class AgentChannelService(
         {
             connections.Remove(session);
             await call.CancelAsync();
+            // Once the writer has stopped: what it never began to write certainly did not reach the agent.
+            await Task.WhenAny(writer);
+            var unwritten = session.TakeUnwritten();
+            try
+            {
+                await engine.OnSessionClosedAsync(agent.Id, session.Id, unwritten, CancellationToken.None);
+            }
+            catch (Exception e)
+            {
+                logger.LogError(e, "Putting back the {Count} assignment(s) never written to agent {Agent} failed; their leases decide them.", unwritten.Count, agent.Id);
+            }
+
             await writer;
             try
             {

@@ -179,8 +179,6 @@ public sealed partial class AssignmentBuilder(
         }
         if (action.Executor == Executors.OpenTofu && run is { Operation: Operations.Provision or Operations.Retire })
             await AddHostKeyMasksAsync(attempt, run, values, agentId, cancellationToken);
-        if (own.Count > 0 || values.Keys.Any(k => k.StartsWith(SecretNames.HostKeyMaskPrefix, StringComparison.Ordinal)))
-            await db.SaveChangesAsync(cancellationToken);
         values.Remove(SecretNames.SnippetsHostKey, out var nodeHostKey);
         var token = TokenFor(stepName, context);
         values[SecretNames.ProxmoxToken] = values[token];
