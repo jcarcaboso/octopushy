@@ -116,7 +116,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized False | verified False | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: attempts +1, secret_resolutions +2
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by - | promoted False | bootstrap False
@@ -140,7 +140,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized False | verified False | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by - | promoted False | bootstrap False
@@ -166,7 +166,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified False | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: attempts +1, secret_resolutions +2
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by - | promoted False | bootstrap False
@@ -190,7 +190,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified False | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by - | promoted False | bootstrap False
@@ -216,7 +216,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: notifications +1
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by this run | promoted False | bootstrap False
@@ -240,7 +240,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by this run | promoted False | bootstrap False
@@ -269,7 +269,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: attempts +1, secret_resolutions +2
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by this run | promoted True | bootstrap False
@@ -294,7 +294,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: attempts +1, secret_resolutions +3
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by this run | promoted True | bootstrap False
@@ -320,7 +320,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed True
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by this run | promoted True | bootstrap False
@@ -344,7 +344,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed True
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by this run | promoted True | bootstrap False
@@ -421,7 +421,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed True
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed True
             access key v3: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             access key v1: verified by another | promoted False | bootstrap True
             access key v2: verified by this run | promoted True | bootstrap False
@@ -448,7 +448,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed True
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed True
             access key v3: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             access key v1: verified by another | promoted False | bootstrap True
             access key v2: verified by this run | promoted True | bootstrap False
@@ -484,7 +484,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed False
             access key v3: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: notifications +1
             access key v1: verified by another | promoted False | bootstrap True
             access key v2: verified by this run | promoted True | bootstrap False
@@ -511,7 +511,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed False
             access key v3: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             access key v1: verified by another | promoted False | bootstrap True
             access key v2: verified by this run | promoted True | bootstrap False
@@ -546,7 +546,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: notifications +1
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by this run | promoted True | bootstrap False
@@ -570,7 +570,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by this run | promoted True | bootstrap False
@@ -603,7 +603,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: notifications +1
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by this run | promoted True | bootstrap False
@@ -636,7 +636,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: notifications +1
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by this run | promoted True | bootstrap False
@@ -660,7 +660,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by this run | promoted True | bootstrap False
@@ -693,7 +693,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: notifications +1
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by this run | promoted True | bootstrap False
@@ -726,7 +726,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified False | removed False
             access key v2: last used - at False | provisioned False | authorized False | verified False | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: notifications +1
             access key v1: verified by - | promoted False | bootstrap True
             access key v2: verified by - | promoted False | bootstrap False
@@ -761,7 +761,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified False | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: notifications +1
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by - | promoted False | bootstrap False
@@ -785,7 +785,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified False | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by - | promoted False | bootstrap False
@@ -819,7 +819,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized False | verified False | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: notifications +1
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by - | promoted False | bootstrap False
@@ -843,7 +843,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified False | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: attempts +1, secret_resolutions +2
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by - | promoted False | bootstrap False
@@ -867,7 +867,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified False | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by - | promoted False | bootstrap False
@@ -902,7 +902,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified False | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: notifications +1
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by - | promoted False | bootstrap False
@@ -926,7 +926,7 @@ public class AccessRotationEffectCharacterizationTests(PostgresFixture postgres)
             configuration: applied another | revision this run's | at True | action setup | snapshot - | proposed another | desired another
             access key v1: last used by another at True | provisioned True | authorized False | verified True | removed False
             access key v2: last used - at False | provisioned False | authorized True | verified True | removed False
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: notifications +1
             access key v1: verified by this run | promoted False | bootstrap True
             access key v2: verified by this run | promoted False | bootstrap False
