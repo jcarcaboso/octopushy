@@ -141,6 +141,17 @@ describe("readDefinition", () => {
     ]);
   });
 
+  it("opens only http(s) links in the browser; tcp:// and javascript: are plain text", () => {
+    const text = 'links: ["https://a.example/", "tcp://a.example:443", "javascript:alert(1)", "ftp://x/"]';
+    const sections = read(text, "service");
+    expect(section(sections, "general").fields.map((item) => item.value)).toEqual([
+      { kind: "link", url: "https://a.example/" },
+      { kind: "text", text: "tcp://a.example:443" },
+      { kind: "text", text: "javascript:alert(1)" },
+      { kind: "text", text: "ftp://x/" },
+    ]);
+  });
+
   it("merges secrets and secretFiles where the first of them is, and notes a file", () => {
     const text = [
       "inputs: { a: 1 }",

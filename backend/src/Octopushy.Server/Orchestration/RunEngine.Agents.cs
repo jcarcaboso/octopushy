@@ -854,7 +854,19 @@ public sealed partial class RunEngine
         // Only conditional, atomic renewals bypass the engine's single-writer lock.
         await using var scope = scopes.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
-        var ids = runningAttemptIds.Select(Guid.Parse).ToList();
+        // An id that is not a Guid is skipped, not fatal: one malformed id must not cost the agent its
+        // lease renewal and LastSeenAt for the attempts it does hold. As in OnResultAsync below.
+        var ids = new List<Guid>();
+        var malformed = 0;
+        foreach (var id in runningAttemptIds)
+        {
+            if (Guid.TryParse(id, out var attemptId))
+                ids.Add(attemptId);
+            else
+                malformed++;
+        }
+        if (malformed > 0)
+            logger.LogWarning("Agent {Agent} sent {Malformed} heartbeat attempt id(s) that are not Guids; they were skipped.", agentId, malformed);
         var lease = clock.GetUtcNow().AddSeconds(options.Value.AgentChannel.LeaseSeconds);
         await db.Attempts
             .Where(a => a.AgentId == agentId && ids.Contains(a.Id)

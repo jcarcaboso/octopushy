@@ -922,6 +922,29 @@ async fn apply_refuses_a_corrupt_or_missing_plan() {
         r.result
     );
 
+    // An artifact with no sha256 is not the approved plan either.
+    let unhashed = Artifact {
+        name: "plan.tar.gz".into(),
+        sha256: String::new(),
+        content: content.clone(),
+    };
+    let r = run(
+        &fx,
+        "a-4",
+        "apply",
+        &input(false, json!({})),
+        repo_tar(None),
+        vec![unhashed],
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(
+        matches!(&r.result, Err(Failure::Failed { message, .. }) if message.contains("carries no sha256")),
+        "{:?}",
+        r.result
+    );
+    assert!(fx.read("args.log").is_empty(), "nothing ran");
+
     // A failing apply fails the attempt.
     let ok = Artifact {
         name: "plan.tar.gz".into(),
@@ -930,7 +953,7 @@ async fn apply_refuses_a_corrupt_or_missing_plan() {
     };
     let r = run(
         &fx,
-        "a-4",
+        "a-5",
         "apply",
         &input(false, json!({ "TF_VAR_FAKE_APPLY_EXIT": "1" })),
         repo_tar(None),

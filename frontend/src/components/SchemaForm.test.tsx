@@ -98,8 +98,24 @@ describe("SchemaForm", () => {
     await userEvent.clear(version);
     await userEvent.type(version, "latest");
     await userEvent.tab();
-    expect(screen.getByText("This does not match the pattern the workflow expects.")).toBeInTheDocument();
+    // A pattern the value does not match is hint text, not a client-side verdict: the server validates the value.
+    expect(version).toHaveAttribute("aria-invalid", "false");
+    expect(within(version.closest(".field")! as HTMLElement).getByText(/^expected format:/)).toBeInTheDocument();
   });
+
+  it("shows a hostile pattern as hint text without executing it, so it cannot hang the tab", async () => {
+    // ^(a+)+$ over a run of a's that fails to match is the classic catastrophic backtracking case: compiled and tested
+    // after each keystroke, it would freeze the tab. The pattern must only ever be rendered as text.
+    const schema: Schema = { type: "object", properties: { code: { type: "string", pattern: "^(a+)+$" } } };
+    const seen = { value: null as JsonObject | null };
+    const initial: JsonObject = { code: "" };
+    render(<Harness schema={schema} initial={initial} seen={seen} />);
+    expect(screen.getByText("expected format: ^(a+)+$")).toBeInTheDocument();
+    const field = screen.getByLabelText(/^code/);
+    await userEvent.type(field, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaab");
+    expect(seen.value).toEqual({ code: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaab" });
+    expect(field).toHaveAttribute("aria-invalid", "false");
+  }, 15_000);
 
   it("edits what it cannot render as YAML, and keeps keys the schema does not name", async () => {
     const schema: Schema = {

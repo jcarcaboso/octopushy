@@ -609,11 +609,16 @@ async fn apply(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
             ))
         })?;
     let actual = sha256_hex(&artifact.content);
+    // The artifact's sha256 is the approved plan's hash, and the server always names
+    // it (the proto documents it, and the controller refuses to build an assignment
+    // without one). An artifact that carries none is not the approved plan.
     if artifact.sha256.is_empty() {
-        ctx.log.agent(format!(
-            "{PLAN_ARTIFACT} has no sha256; its content hashes to {actual}"
-        ));
-    } else if !artifact.sha256.eq_ignore_ascii_case(&actual) {
+        return Err(Failure::msg(format!(
+            "{PLAN_ARTIFACT} carries no sha256, so it is not the approved plan \
+             (its content hashes to {actual})"
+        )));
+    }
+    if !artifact.sha256.eq_ignore_ascii_case(&actual) {
         return Err(Failure::msg(format!(
             "{PLAN_ARTIFACT} is corrupt: sha256 {actual}, expected {}",
             artifact.sha256
