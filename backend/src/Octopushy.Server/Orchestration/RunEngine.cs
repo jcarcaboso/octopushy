@@ -679,7 +679,7 @@ public sealed partial class RunEngine(
 
         var resource = await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken);
         var now = clock.GetUtcNow();
-        if (StepEffectFor(step.Name) is { } effect)
+        if (StepEffectFor(step.Name, run.Operation) is { } effect)
         {
             await effect.ApplyAsync(this, db, store, run, step, resource, outputs, now, cancellationToken);
             return;
@@ -741,14 +741,8 @@ public sealed partial class RunEngine(
                 await RecordProvisionedKeyAsync(db, run, now, cancellationToken);
                 await RecordDeliveredHostKeyAsync(db, run, now, cancellationToken);
                 break;
-            case StepNames.Apply:
-                resource.Outputs = null;
-                break;
             // An attached machine: verified at its VMID, on its host, of its kind, then protected. Only then is the guest bound,
             // on a person's word, recorded as the run's approval. Octopushy did not create it, so nothing else could bind it.
-            case StepNames.Verify when run.Operation == Operations.Attach:
-                resource.VerifiedAt = now;
-                break;
             case StepNames.Protect when run.Operation == Operations.Attach:
                 var attaching = RunContext.Parse(run.Context);
                 if (await SafetyBoundary.AttachProblemAsync(db, resource, resource.ParentAddress!, attaching.Proxmox.Vmid!.Value, cancellationToken) is { } problem)
