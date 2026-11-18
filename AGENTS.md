@@ -47,8 +47,9 @@ to find when available.
 ## CI gates
 
 `.github/workflows/checks.yml` runs backend tests, offline repository validation,
-OpenAPI drift, Rust tests, rustfmt and clippy with warnings as errors, frontend
-tests, typecheck, lint, build and generated-client drift, and dependency audits.
+C# formatting (`dotnet format`), OpenAPI drift, Rust tests, rustfmt and clippy
+with warnings as errors, frontend tests, typecheck, lint, build and
+generated-client drift, and dependency audits.
 Backend schema tests check the EF model against the migrations. Regenerate both
 the OpenAPI document and client when an API changes. Do not hand-edit the client.
 

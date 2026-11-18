@@ -411,7 +411,9 @@ public sealed class ServerHarness : IAsyncDisposable
         var session = new AgentSession(agent.Id, old.Name, executors ?? old.Executors, old.Capabilities, old.ToolRuntime,
             unavailable is null ? null : AgentAvailability.Unavailable(unavailable))
         {
-            Responder = old.Responder, RemoteAddress = old.RemoteAddress, Version = version,
+            Responder = old.Responder,
+            RemoteAddress = old.RemoteAddress,
+            Version = version,
         };
         session.ReportRunning(running, clock.GetUtcNow());
         // As the channel does: the Hello is settled and the connection registered in one step.
@@ -442,7 +444,8 @@ public sealed class ServerHarness : IAsyncDisposable
             await db.SaveChangesAsync();
         });
         var session = new AgentSession(agent.Id, agent.Name, agent.Executors, capabilities, runtime,
-            unavailable is null ? null : AgentAvailability.Unavailable(unavailable)) { Responder = responder, RemoteAddress = remote };
+            unavailable is null ? null : AgentAvailability.Unavailable(unavailable))
+        { Responder = responder, RemoteAddress = remote };
         await Engine.OnHelloAsync(agent.Id, new Hello { AgentVersion = "test" }, CancellationToken.None);
         Services.GetRequiredService<AgentConnections>().Add(session);
         return new FakeAgent(this, agent.Id, session);
@@ -684,7 +687,9 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
         var run = await harness.QueryAsync(db => db.Attempts.AsNoTracking().Where(a => a.Id == attemptId)
             .Select(a => new
             {
-                a.Step!.Stage, a.Step.Run!.Operation, a.Step.Run.Context,
+                a.Step!.Stage,
+                a.Step.Run!.Operation,
+                a.Step.Run.Context,
                 Bound = db.Resources.Any(r => r.Id == a.Step.Run.ResourceId && r.BoundVmid != null),
             }).FirstOrDefaultAsync());
         if (run is null || run.Stage is not null)

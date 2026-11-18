@@ -144,7 +144,9 @@ public class AgentAvailabilityTests(PostgresFixture postgres) : IClassFixture<Po
 
         var kept = AgentAvailability.Unavailable(new Dictionary<string, string>
         {
-            ["ansible"] = "missing\nprogram", ["<script>"] = "x", ["Ansible"] = "case matters",
+            ["ansible"] = "missing\nprogram",
+            ["<script>"] = "x",
+            ["Ansible"] = "case matters",
         });
         Assert.Equal(["ansible"], kept.Keys);
         Assert.Equal("missing program", kept["ansible"]);
@@ -233,7 +235,9 @@ public class AgentAvailabilityTests(PostgresFixture postgres) : IClassFixture<Po
         {
             Hello = new Hello
             {
-                AgentVersion = "test", Executors = { "proxmox", "ansible" }, Capabilities = { "opentofu-builtin-state", WorkerReachability.Capability },
+                AgentVersion = "test",
+                Executors = { "proxmox", "ansible" },
+                Capabilities = { "opentofu-builtin-state", WorkerReachability.Capability },
                 Unavailable = { ["opentofu"] = hostile, ["made-up"] = "dropped" },
             },
         });

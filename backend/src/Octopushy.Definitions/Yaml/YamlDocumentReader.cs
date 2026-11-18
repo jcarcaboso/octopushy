@@ -138,39 +138,39 @@ public static partial class YamlDocumentReader
         switch (node)
         {
             case YamlMappingNode mapping:
-            {
-                var result = new JsonObject();
-                foreach (var (keyNode, valueNode) in mapping.Children)
                 {
-                    if (keyNode is not YamlScalarNode { Value: { } key })
+                    var result = new JsonObject();
+                    foreach (var (keyNode, valueNode) in mapping.Children)
                     {
-                        throw new YamlReadException("Mapping keys must be plain strings.", LineOf(keyNode.Start));
+                        if (keyNode is not YamlScalarNode { Value: { } key })
+                        {
+                            throw new YamlReadException("Mapping keys must be plain strings.", LineOf(keyNode.Start));
+                        }
+
+                        if (result.ContainsKey(key))
+                        {
+                            throw new YamlReadException($"The key '{key}' appears twice.", LineOf(keyNode.Start));
+                        }
+
+                        Count(key, keyNode, ref characters);
+                        var childPointer = pointer + "/" + EscapePointer(key);
+                        result[key] = Convert(valueNode, childPointer, lines, depth + 1, ref nodes, ref characters);
                     }
 
-                    if (result.ContainsKey(key))
-                    {
-                        throw new YamlReadException($"The key '{key}' appears twice.", LineOf(keyNode.Start));
-                    }
-
-                    Count(key, keyNode, ref characters);
-                    var childPointer = pointer + "/" + EscapePointer(key);
-                    result[key] = Convert(valueNode, childPointer, lines, depth + 1, ref nodes, ref characters);
+                    return result;
                 }
-
-                return result;
-            }
             case YamlSequenceNode sequence:
-            {
-                var result = new JsonArray();
-                var index = 0;
-                foreach (var item in sequence.Children)
                 {
-                    result.Add(Convert(item, pointer + "/" + index.ToString(CultureInfo.InvariantCulture), lines, depth + 1, ref nodes, ref characters));
-                    index++;
-                }
+                    var result = new JsonArray();
+                    var index = 0;
+                    foreach (var item in sequence.Children)
+                    {
+                        result.Add(Convert(item, pointer + "/" + index.ToString(CultureInfo.InvariantCulture), lines, depth + 1, ref nodes, ref characters));
+                        index++;
+                    }
 
-                return result;
-            }
+                    return result;
+                }
             case YamlScalarNode scalar:
                 Count(scalar.Value, scalar, ref characters);
                 return ConvertScalar(scalar);

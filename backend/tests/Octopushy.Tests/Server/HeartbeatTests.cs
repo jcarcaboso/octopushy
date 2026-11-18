@@ -18,8 +18,13 @@ public class HeartbeatTests(PostgresFixture postgres) : IClassFixture<PostgresFi
         var oldLease = clock.GetUtcNow().AddSeconds(-1);
         Attempt Attempt(string status, Guid owner) => new()
         {
-            Id = Guid.NewGuid(), Executor = "proxmox", Action = "observe", AgentId = owner,
-            Status = status, LeaseExpiresAt = oldLease, CreatedAt = clock.GetUtcNow(),
+            Id = Guid.NewGuid(),
+            Executor = "proxmox",
+            Action = "observe",
+            AgentId = owner,
+            Status = status,
+            LeaseExpiresAt = oldLease,
+            CreatedAt = clock.GetUtcNow(),
         };
         var attempts = new[]
         {
@@ -73,8 +78,13 @@ public class HeartbeatTests(PostgresFixture postgres) : IClassFixture<PostgresFi
         var oldLease = DateTimeOffset.UtcNow.AddSeconds(-1);
         var attempt = new Attempt
         {
-            Id = Guid.NewGuid(), Executor = "proxmox", Action = "observe", AgentId = agent.Id,
-            Status = AttemptStatuses.Running, LeaseExpiresAt = oldLease, CreatedAt = DateTimeOffset.UtcNow,
+            Id = Guid.NewGuid(),
+            Executor = "proxmox",
+            Action = "observe",
+            AgentId = agent.Id,
+            Status = AttemptStatuses.Running,
+            LeaseExpiresAt = oldLease,
+            CreatedAt = DateTimeOffset.UtcNow,
         };
         await server.WithDbAsync(async db =>
         {
@@ -104,8 +114,14 @@ public class HeartbeatTests(PostgresFixture postgres) : IClassFixture<PostgresFi
                 stream.Send(new AgentMessage { Log = new AttemptLog { AttemptId = attempt.Id.ToString(), FirstSequence = (ulong)i, Lines = { new LogLine { Text = "held" } } } });
             // An apply offers each new state it writes: many, while started still waits.
             for (var i = 0; i < 300; i++)
-                stream.Send(new AgentMessage { StateSnapshot = new AttemptStateSnapshot { AttemptId = attempt.Id.ToString(),
-                    State = new Artifact { Name = "terraform.tfstate", Content = Google.Protobuf.ByteString.CopyFromUtf8($"{{\"serial\":{i}}}"), Sha256 = "" } } });
+                stream.Send(new AgentMessage
+                {
+                    StateSnapshot = new AttemptStateSnapshot
+                    {
+                        AttemptId = attempt.Id.ToString(),
+                        State = new Artifact { Name = "terraform.tfstate", Content = Google.Protobuf.ByteString.CopyFromUtf8($"{{\"serial\":{i}}}"), Sha256 = "" }
+                    }
+                });
             stream.Send(new AgentMessage { Result = new AttemptResult { AttemptId = attempt.Id.ToString(), Outcome = Outcome.Failed, Error = "late" } });
             stream.Send(new AgentMessage { Heartbeat = new Heartbeat { RunningAttemptIds = { attempt.Id.ToString() } } });
             var lease = oldLease;

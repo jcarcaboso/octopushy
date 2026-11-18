@@ -210,8 +210,14 @@ public sealed partial class ChangeService
                     var now = clock.GetUtcNow();
                     var values = generations.Select(g => new GeneratedValue
                     {
-                        Id = Guid.CreateVersion7(), ChangeId = id, Secret = g.Secret, Key = g.Key, Generator = g.Generator,
-                        StoreDescription = $"Generated at deploy for {target.Address} ({g.Generator}, change {id}).", CreatedAt = now, UpdatedAt = now,
+                        Id = Guid.CreateVersion7(),
+                        ChangeId = id,
+                        Secret = g.Secret,
+                        Key = g.Key,
+                        Generator = g.Generator,
+                        StoreDescription = $"Generated at deploy for {target.Address} ({g.Generator}, change {id}).",
+                        CreatedAt = now,
+                        UpdatedAt = now,
                     }).ToList();
                     db.GeneratedValues.AddRange(values);
                     await db.SaveChangesAsync(ct);

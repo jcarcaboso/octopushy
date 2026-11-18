@@ -642,8 +642,13 @@ public class ChangeTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
             db.Agents.Add(new AgentRecord { Id = agentId, Name = "held-push", CertificateSerial = "held-push" });
             db.Attempts.Add(new Attempt
             {
-                Id = attemptId, Executor = "proxmox", Action = "observe", AgentId = agentId, Status = AttemptStatuses.Running,
-                LeaseExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5), CreatedAt = DateTimeOffset.UtcNow,
+                Id = attemptId,
+                Executor = "proxmox",
+                Action = "observe",
+                AgentId = agentId,
+                Status = AttemptStatuses.Running,
+                LeaseExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5),
+                CreatedAt = DateTimeOffset.UtcNow,
             });
             await db.SaveChangesAsync();
         });
@@ -791,9 +796,20 @@ public class ChangeTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
         {
             db.Changes.Add(new ResourceChange
             {
-                Id = id, Kind = ChangeKinds.Edit, ResourceKind = ResourceKinds.Guest, ResourceId = form.ResourceId, Address = Guest, Author = "ops",
-                BaseCommit = form.BaseCommit!, Message = "krb-app-01: memory 2048 → 4096", Status = status, Files = [GuestFile],
-                Edited = """{"hardware":{"cores":2,"memory":4096}}""", CreatedAt = at, UpdatedAt = at, CandidateCommits = candidates ?? [],
+                Id = id,
+                Kind = ChangeKinds.Edit,
+                ResourceKind = ResourceKinds.Guest,
+                ResourceId = form.ResourceId,
+                Address = Guest,
+                Author = "ops",
+                BaseCommit = form.BaseCommit!,
+                Message = "krb-app-01: memory 2048 → 4096",
+                Status = status,
+                Files = [GuestFile],
+                Edited = """{"hardware":{"cores":2,"memory":4096}}""",
+                CreatedAt = at,
+                UpdatedAt = at,
+                CandidateCommits = candidates ?? [],
             });
             await db.SaveChangesAsync();
         });
@@ -1411,10 +1427,20 @@ public class ChangeTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
         {
             db.Changes.Add(new ResourceChange
             {
-                Id = id, Kind = ChangeKinds.Edit, ResourceKind = ResourceKinds.Guest, ResourceId = form.ResourceId, Address = Guest, Author = "ops",
-                BaseCommit = form.BaseCommit!, Message = "krb-app-01: workflow test-vm@1 → test-vm@1.0", Status = ChangeStatuses.Committed,
-                Files = [GuestFile], Commit = pinned, Edited = """{"workflow":"test-vm@1.0"}""",
-                CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+                Id = id,
+                Kind = ChangeKinds.Edit,
+                ResourceKind = ResourceKinds.Guest,
+                ResourceId = form.ResourceId,
+                Address = Guest,
+                Author = "ops",
+                BaseCommit = form.BaseCommit!,
+                Message = "krb-app-01: workflow test-vm@1 → test-vm@1.0",
+                Status = ChangeStatuses.Committed,
+                Files = [GuestFile],
+                Commit = pinned,
+                Edited = """{"workflow":"test-vm@1.0"}""",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
             });
             await db.SaveChangesAsync();
         });

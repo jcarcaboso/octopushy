@@ -122,8 +122,15 @@ public class AttachTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
         {
             db.Resources.Add(new Resource
             {
-                Id = Guid.CreateVersion7(), Address = $"{Installation}/someone", Kind = ResourceKinds.Guest, Lab = "home", ParentAddress = Installation,
-                BoundInstallation = Installation, BoundVmid = Vmid, BoundAt = DateTimeOffset.UtcNow, FirstSeenAt = DateTimeOffset.UtcNow,
+                Id = Guid.CreateVersion7(),
+                Address = $"{Installation}/someone",
+                Kind = ResourceKinds.Guest,
+                Lab = "home",
+                ParentAddress = Installation,
+                BoundInstallation = Installation,
+                BoundVmid = Vmid,
+                BoundAt = DateTimeOffset.UtcNow,
+                FirstSeenAt = DateTimeOffset.UtcNow,
             });
             await db.SaveChangesAsync();
         });
@@ -176,8 +183,15 @@ public class AttachTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
             var other = await db.Resources.FirstAsync(r => r.Address == Installation);
             db.Resources.Add(new Resource
             {
-                Id = Guid.CreateVersion7(), Address = $"{Installation}/someone", Kind = ResourceKinds.Guest, Lab = "home", ParentAddress = Installation,
-                BoundInstallation = Installation, BoundVmid = Vmid, BoundAt = DateTimeOffset.UtcNow, FirstSeenAt = DateTimeOffset.UtcNow,
+                Id = Guid.CreateVersion7(),
+                Address = $"{Installation}/someone",
+                Kind = ResourceKinds.Guest,
+                Lab = "home",
+                ParentAddress = Installation,
+                BoundInstallation = Installation,
+                BoundVmid = Vmid,
+                BoundAt = DateTimeOffset.UtcNow,
+                FirstSeenAt = DateTimeOffset.UtcNow,
             });
             await db.SaveChangesAsync();
         });
@@ -269,7 +283,11 @@ public class AttachTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
                     ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = true }),
                     ["guests"] = new JsonArray(vms.Select(vm => (JsonNode)new JsonObject
                     {
-                        ["vmid"] = vm.Vmid, ["name"] = vm.Name, ["host"] = vm.Host, ["status"] = "running", ["kind"] = "qemu",
+                        ["vmid"] = vm.Vmid,
+                        ["name"] = vm.Name,
+                        ["host"] = vm.Host,
+                        ["status"] = "running",
+                        ["kind"] = "qemu",
                     }).ToArray()),
                 }.ToJsonString(),
             });

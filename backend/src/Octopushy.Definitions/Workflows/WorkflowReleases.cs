@@ -168,13 +168,13 @@ public static class WorkflowReferences
             Read(Path.Combine(template, "template.yaml"), template: true);
 
         foreach (var lab in DefinitionFiles.SubDirectories(Path.Combine(root, "labs")))
-        foreach (var installation in DefinitionFiles.SubDirectories(Path.Combine(lab, "proxmox")))
-        foreach (var guest in DefinitionFiles.SubDirectories(Path.Combine(installation, "guests")))
-        {
-            Read(Path.Combine(guest, "guest.yaml"));
-            foreach (var service in DefinitionFiles.SubDirectories(Path.Combine(guest, "services")))
-                Read(Path.Combine(service, "service.yaml"));
-        }
+            foreach (var installation in DefinitionFiles.SubDirectories(Path.Combine(lab, "proxmox")))
+                foreach (var guest in DefinitionFiles.SubDirectories(Path.Combine(installation, "guests")))
+                {
+                    Read(Path.Combine(guest, "guest.yaml"));
+                    foreach (var service in DefinitionFiles.SubDirectories(Path.Combine(guest, "services")))
+                        Read(Path.Combine(service, "service.yaml"));
+                }
 
         return found.Select(text => WorkflowReference.Parse(text)!).ToList();
     }

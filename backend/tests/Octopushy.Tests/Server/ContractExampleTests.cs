@@ -20,7 +20,7 @@ namespace Octopushy.Tests.Server;
 public class ContractExampleTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Guest = "home/korriban/krb-app-01";
-    private const string GuestDirectory ="labs/home/proxmox/korriban/guests/krb-app-01";
+    private const string GuestDirectory = "labs/home/proxmox/korriban/guests/krb-app-01";
     private const string SshKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----\n";
     private const string HostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4yMxTo2ZC6CYBxvdtnHHtR5HBTjQeL+w9jI3rj+PyY";
 

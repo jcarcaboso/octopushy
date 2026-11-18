@@ -118,19 +118,22 @@ public class StepTypeCharacterizationTests
         yield return ("provision shared", guest with { OpenTofu = Tofu(), Secrets = Shared() });
         yield return ("provision split snippets", guest with
         {
-            OpenTofu = Tofu(snippets: true), Secrets = WithSnippets(Split()),
+            OpenTofu = Tofu(snippets: true),
+            Secrets = WithSnippets(Split()),
             Snippets = new SnippetsContext("home", "octopushy", "10.1.0.10", 22),
         });
         yield return ("provision shared snippets", guest with
         {
-            OpenTofu = Tofu(snippets: true), Secrets = WithSnippets(Shared()),
+            OpenTofu = Tofu(snippets: true),
+            Secrets = WithSnippets(Shared()),
             Snippets = new SnippetsContext("home", "octopushy", "10.1.0.10", 22),
         });
         // The snippet environment without the upload: a run the bindings check refuses, kept to pin which step gets which.
         yield return ("provision snippet env without upload", guest with { OpenTofu = Tofu(snippets: true), Secrets = WithSnippets(Split()) });
         yield return ("provision built template", guest with
         {
-            OpenTofu = Tofu(image: new TemplateImage("0123abcd", 1024, "debian-13.qcow2")), Secrets = Split(),
+            OpenTofu = Tofu(image: new TemplateImage("0123abcd", 1024, "debian-13.qcow2")),
+            Secrets = Split(),
         });
         yield return ("retire split", guest with { OpenTofu = Tofu(), Secrets = Split(), DefinitionRemovedIn = "abc123" });
         yield return ("retire shared", guest with { OpenTofu = Tofu(), Secrets = Shared() });
@@ -148,13 +151,15 @@ public class StepTypeCharacterizationTests
         });
         yield return ("rotate-access managed host key", configure with
         {
-            Ansible = Ansible(Operations.RotateAccess), ManagedHostKey = true, AccessRotation = new AccessRotationContext(1, 2, [1]),
+            Ansible = Ansible(Operations.RotateAccess),
+            ManagedHostKey = true,
+            AccessRotation = new AccessRotationContext(1, 2, [1]),
         });
         yield return ("pipeline", Pipeline(managedHostKey: false));
         yield return ("pipeline managed host key", Pipeline(managedHostKey: true));
         foreach (var managed in new[] { false, true })
-        foreach (var stage in new[] { "dns", "deploy" })
-            yield return ($"pipeline{(managed ? " managed host key" : "")} stage {stage}", Pipeline(managed).ForStage(stage));
+            foreach (var stage in new[] { "dns", "deploy" })
+                yield return ($"pipeline{(managed ? " managed host key" : "")} stage {stage}", Pipeline(managed).ForStage(stage));
         var installation = new RunContext { Address = "home", Proxmox = new ProxmoxContext(Endpoint, false, "proxmox/home/ca", null, null, null, null) };
         yield return ("observation split", installation with { Secrets = new() { [SecretNames.ProxmoxReadOnlyToken] = "proxmox/home/read", [SecretNames.ProxmoxCa] = "proxmox/home/ca" } });
         yield return ("observation shared without ca", installation with { Secrets = new() { [SecretNames.ProxmoxSharedToken] = "proxmox/home/token" } });
@@ -197,20 +202,20 @@ public class StepTypeCharacterizationTests
             table.Append($"{Show(name)} token: {Outcome(() => AssignmentBuilder.TokenFor(name!))}\n");
         }
         foreach (var (shape, context) in Shapes())
-        foreach (var name in Names())
-        {
-            table.Append($"{shape} {Show(name)} token: {Outcome(() => ContextToken.Invoke(null, [name, context])!)}\n");
-            table.Append($"{shape} {Show(name)} secrets: {Outcome(() => AssignmentBuilder.SecretsFor(name!, context))}\n");
-        }
+            foreach (var name in Names())
+            {
+                table.Append($"{shape} {Show(name)} token: {Outcome(() => ContextToken.Invoke(null, [name, context])!)}\n");
+                table.Append($"{shape} {Show(name)} secrets: {Outcome(() => AssignmentBuilder.SecretsFor(name!, context))}\n");
+            }
         // A pipeline's step reaches its secrets through its stage, named as the run records them.
         foreach (var managed in new[] { false, true })
-        foreach (var stage in new string?[] { "dns", "deploy", null })
-        foreach (var name in Names())
-        {
-            var step = new Step { Name = name!, Kind = StepKinds.Agent, Stage = stage };
-            table.Append($"pipeline{(managed ? " managed host key" : "")} step of {stage ?? "no stage"} {Show(name)} secrets: "
-                + $"{Outcome(() => AssignmentBuilder.SecretsFor(step, Pipeline(managed)))}\n");
-        }
+            foreach (var stage in new string?[] { "dns", "deploy", null })
+                foreach (var name in Names())
+                {
+                    var step = new Step { Name = name!, Kind = StepKinds.Agent, Stage = stage };
+                    table.Append($"pipeline{(managed ? " managed host key" : "")} step of {stage ?? "no stage"} {Show(name)} secrets: "
+                        + $"{Outcome(() => AssignmentBuilder.SecretsFor(step, Pipeline(managed)))}\n");
+                }
         return table.ToString();
     }
 

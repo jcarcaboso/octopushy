@@ -228,8 +228,13 @@ public class WorkflowsRepositoryTests(PostgresFixture postgres) : IClassFixture<
         {
             db.WorkflowReleases.Add(new WorkflowReleaseRecord
             {
-                Repository = workflows.Root, WorkflowId = "test-vm", Major = 1, Minor = 5, Commit = new string('e', 40),
-                FirstSeenAt = DateTimeOffset.UtcNow, DeletedAt = DateTimeOffset.UtcNow,
+                Repository = workflows.Root,
+                WorkflowId = "test-vm",
+                Major = 1,
+                Minor = 5,
+                Commit = new string('e', 40),
+                FirstSeenAt = DateTimeOffset.UtcNow,
+                DeletedAt = DateTimeOffset.UtcNow,
             });
             await db.SaveChangesAsync();
         });

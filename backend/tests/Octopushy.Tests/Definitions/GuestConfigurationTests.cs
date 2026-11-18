@@ -331,7 +331,7 @@ public class GuestConfigurationTests
     }
 
     [Theory]
-    [InlineData("    reinstall: { approval: automatic }\n","policy.actions names 'reinstall', and the workflow app@1.0 has no such action")]
+    [InlineData("    reinstall: { approval: automatic }\n", "policy.actions names 'reinstall', and the workflow app@1.0 has no such action")]
     [InlineData("    setup: { approval: sometimes }\n", "")]
     [InlineData("    setup: {}\n", "")]
     [InlineData("    setup: { approval: automatic, destructive: automatic }\n", "")]

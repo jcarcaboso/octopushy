@@ -35,7 +35,10 @@ public class StateNotInTextTests
         var run = new Run { Operation = Operations.Pipeline, Reason = "manual" };
         var plan = new Step
         {
-            Name = StepNames.Plan, Kind = StepKinds.Agent, Stage = "expose", Status = StepStatuses.Succeeded,
+            Name = StepNames.Plan,
+            Kind = StepKinds.Agent,
+            Stage = "expose",
+            Status = StepStatuses.Succeeded,
             Outputs = hasChanges is { } has ? $$"""{"hasChanges": {{(has ? "true" : "false")}}}""" : null,
         };
         var apply = new Step { Name = StepNames.Apply, Kind = StepKinds.Agent, Stage = "expose", Status = StepStatuses.Skipped, Detail = detail };

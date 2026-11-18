@@ -65,10 +65,16 @@ public class RunHistoryIntegrityTests(PostgresFixture postgres) : IClassFixture<
     private static Attempt NewAttempt() => new() { Id = Guid.NewGuid(), Executor = "test", Action = "test" };
     private static ArtifactRecord NewArtifact(Guid attemptId) => new()
     {
-        Id = Guid.NewGuid(), AttemptId = attemptId, Name = "plan", Sha256 = "digest",
+        Id = Guid.NewGuid(),
+        AttemptId = attemptId,
+        Name = "plan",
+        Sha256 = "digest",
     };
     private static SecretResolution NewResolution(Guid attemptId) => new()
     {
-        AttemptId = attemptId, Key = "test/key", Version = 1, AgentId = Guid.NewGuid(),
+        AttemptId = attemptId,
+        Key = "test/key",
+        Version = 1,
+        AgentId = Guid.NewGuid(),
     };
 }

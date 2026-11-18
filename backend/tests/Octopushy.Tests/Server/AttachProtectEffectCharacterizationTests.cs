@@ -60,7 +60,11 @@ public class AttachProtectEffectCharacterizationTests(PostgresFixture postgres) 
                     ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = true }),
                     ["guests"] = new JsonArray(vmids.Select(vmid => (JsonNode)new JsonObject
                     {
-                        ["vmid"] = vmid, ["name"] = "legacy-app", ["host"] = "korriban", ["status"] = "running", ["kind"] = "qemu",
+                        ["vmid"] = vmid,
+                        ["name"] = "legacy-app",
+                        ["host"] = "korriban",
+                        ["status"] = "running",
+                        ["kind"] = "qemu",
                     }).ToArray()),
                 }.ToJsonString(),
             });
@@ -84,9 +88,17 @@ public class AttachProtectEffectCharacterizationTests(PostgresFixture postgres) 
         {
             db.Resources.Add(new Resource
             {
-                Id = Guid.NewGuid(), Kind = ResourceKinds.Guest, Address = Other, ParentAddress = Installation, Lab = "home",
-                BoundVmid = bound ? vmid : null, BoundInstallation = bound ? Installation : null, BoundAt = bound ? DateTimeOffset.UtcNow : null,
-                ReservedVmid = bound ? null : vmid, ReservedInstallation = bound ? null : Installation, ReservedNode = bound ? null : "korriban",
+                Id = Guid.NewGuid(),
+                Kind = ResourceKinds.Guest,
+                Address = Other,
+                ParentAddress = Installation,
+                Lab = "home",
+                BoundVmid = bound ? vmid : null,
+                BoundInstallation = bound ? Installation : null,
+                BoundAt = bound ? DateTimeOffset.UtcNow : null,
+                ReservedVmid = bound ? null : vmid,
+                ReservedInstallation = bound ? null : Installation,
+                ReservedNode = bound ? null : "korriban",
                 ReservedAt = bound ? null : DateTimeOffset.UtcNow,
             });
             await db.SaveChangesAsync();

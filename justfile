@@ -60,6 +60,7 @@ test:
 check:
     scripts/release.sh --check
     scripts/checks/toolchains.sh
+    dotnet format backend/Octopushy.slnx --verify-no-changes
     cd agent && cargo fmt --all -- --check
     cd agent && cargo clippy --workspace --all-targets --locked -- -D warnings
     cd frontend && pnpm run typecheck
