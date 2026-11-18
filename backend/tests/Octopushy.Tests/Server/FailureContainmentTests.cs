@@ -25,8 +25,14 @@ public class FailureContainmentTests(PostgresFixture postgres) : IClassFixture<P
             var installation = await db.Resources.SingleAsync(r => r.Address == "home/korriban");
             db.Runs.Add(new Run
             {
-                Id = bad, ResourceId = installation.Id, RevisionId = good.RevisionId, Commit = good.Commit,
-                Operation = Operations.Provision, Reason = "manual", Context = "[]", CreatedAt = good.CreatedAt.AddMinutes(-1),
+                Id = bad,
+                ResourceId = installation.Id,
+                RevisionId = good.RevisionId,
+                Commit = good.Commit,
+                Operation = Operations.Provision,
+                Reason = "manual",
+                Context = "[]",
+                CreatedAt = good.CreatedAt.AddMinutes(-1),
             });
             await db.SaveChangesAsync();
         });
@@ -49,9 +55,15 @@ public class FailureContainmentTests(PostgresFixture postgres) : IClassFixture<P
             for (var i = 0; i < ids.Length; i++)
                 db.Attempts.Add(new Attempt
                 {
-                    Id = ids[i], Executor = original.Executor, Action = original.Action, ResourceId = original.ResourceId,
-                    RevisionId = original.RevisionId, Context = i == 1 ? "[]" : original.Context,
-                    RequiredLabels = original.RequiredLabels, CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-3 + i), Number = 1,
+                    Id = ids[i],
+                    Executor = original.Executor,
+                    Action = original.Action,
+                    ResourceId = original.ResourceId,
+                    RevisionId = original.RevisionId,
+                    Context = i == 1 ? "[]" : original.Context,
+                    RequiredLabels = original.RequiredLabels,
+                    CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-3 + i),
+                    Number = 1,
                 });
             await db.SaveChangesAsync();
         });

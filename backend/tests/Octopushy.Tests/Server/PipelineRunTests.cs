@@ -103,9 +103,20 @@ public class PipelineRunTests(PostgresFixture postgres) : IClassFixture<Postgres
             var now = DateTimeOffset.UtcNow;
             db.Changes.Add(new ResourceChange
             {
-                Id = id, Kind = ChangeKinds.CreateService, ResourceKind = ResourceKinds.Service, ResourceId = resource.Id, Address = Service,
-                Author = "ops", BaseCommit = head.Commit, Message = "web: deploy", Commit = head.Commit, RevisionId = head.Id,
-                Status = ChangeStatuses.Synced, PreApproval = PreApprovals.Requested, CreatedAt = now, UpdatedAt = now,
+                Id = id,
+                Kind = ChangeKinds.CreateService,
+                ResourceKind = ResourceKinds.Service,
+                ResourceId = resource.Id,
+                Address = Service,
+                Author = "ops",
+                BaseCommit = head.Commit,
+                Message = "web: deploy",
+                Commit = head.Commit,
+                RevisionId = head.Id,
+                Status = ChangeStatuses.Synced,
+                PreApproval = PreApprovals.Requested,
+                CreatedAt = now,
+                UpdatedAt = now,
             });
             await db.SaveChangesAsync();
             return id;
@@ -194,7 +205,11 @@ public class PipelineRunTests(PostgresFixture postgres) : IClassFixture<Postgres
         {
             db.SecretResolutions.Add(new SecretResolution
             {
-                Key = "test/pipeline-secret", Version = 1, AttemptId = Guid.Parse(planned.AttemptId), AgentId = agent.Id, ResolvedAt = DateTimeOffset.UtcNow,
+                Key = "test/pipeline-secret",
+                Version = 1,
+                AttemptId = Guid.Parse(planned.AttemptId),
+                AgentId = agent.Id,
+                ResolvedAt = DateTimeOffset.UtcNow,
             });
             await db.SaveChangesAsync();
         });
@@ -648,14 +663,26 @@ public class PipelineRunTests(PostgresFixture postgres) : IClassFixture<Postgres
                 plan.Outputs = outputs.ToJsonString();
                 var attempt = new Attempt
                 {
-                    Id = Guid.CreateVersion7(), RunId = run.Id, StepId = plan.Id, Number = 1, Executor = "opentofu", Action = "preview",
-                    Status = AttemptStatuses.Succeeded, StateVersion = 0, AgentId = agent.Id, CreatedAt = DateTimeOffset.UtcNow,
+                    Id = Guid.CreateVersion7(),
+                    RunId = run.Id,
+                    StepId = plan.Id,
+                    Number = 1,
+                    Executor = "opentofu",
+                    Action = "preview",
+                    Status = AttemptStatuses.Succeeded,
+                    StateVersion = 0,
+                    AgentId = agent.Id,
+                    CreatedAt = DateTimeOffset.UtcNow,
                 };
                 db.Attempts.Add(attempt);
                 db.Artifacts.Add(new ArtifactRecord
                 {
-                    Id = Guid.CreateVersion7(), AttemptId = attempt.Id, Name = artifact.Name, Sha256 = artifact.Sha256,
-                    Size = artifact.Content.Length, CreatedAt = DateTimeOffset.UtcNow,
+                    Id = Guid.CreateVersion7(),
+                    AttemptId = attempt.Id,
+                    Name = artifact.Name,
+                    Sha256 = artifact.Sha256,
+                    Size = artifact.Content.Length,
+                    CreatedAt = DateTimeOffset.UtcNow,
                 });
             }
 

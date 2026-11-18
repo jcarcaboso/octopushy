@@ -485,9 +485,13 @@ public class ManagedHostKeyTests(PostgresFixture postgres) : IClassFixture<Postg
         var other = Guid.NewGuid();
         GuestHostKey Key(int version, bool spent = false, bool delivered = false, Guid? by = null) => new()
         {
-            Version = version, PublicKey = $"k{version}", Fingerprint = $"f{version}",
-            SpentAt = spent || delivered ? DateTimeOffset.UnixEpoch : null, SpentRunId = spent || delivered ? by ?? other : null,
-            DeliveredAt = delivered ? DateTimeOffset.UnixEpoch : null, DeliveredRunId = delivered ? by ?? other : null,
+            Version = version,
+            PublicKey = $"k{version}",
+            Fingerprint = $"f{version}",
+            SpentAt = spent || delivered ? DateTimeOffset.UnixEpoch : null,
+            SpentRunId = spent || delivered ? by ?? other : null,
+            DeliveredAt = delivered ? DateTimeOffset.UnixEpoch : null,
+            DeliveredRunId = delivered ? by ?? other : null,
         };
         HostKeyVerdict Keep(int carried, params GuestHostKey[] keys) => GuestHostCredentials.Fit(keys, carried, makesMachine: false, run);
         HostKeyVerdict Make(int carried, params GuestHostKey[] keys) => GuestHostCredentials.Fit(keys, carried, makesMachine: true, run);

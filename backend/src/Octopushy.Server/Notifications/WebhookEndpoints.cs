@@ -93,7 +93,9 @@ public static class WebhookEndpoints
                     // Back to as it was before it was set, the kinds chosen kept.
                     db.Entry(state).CurrentValues.SetValues(new WebhookState
                     {
-                        Kinds = state.Kinds, Generation = state.Generation + 1, UpdatedAt = clock.GetUtcNow(),
+                        Kinds = state.Kinds,
+                        Generation = state.Generation + 1,
+                        UpdatedAt = clock.GetUtcNow(),
                     });
                     await db.SaveChangesAsync(ct);
                 }

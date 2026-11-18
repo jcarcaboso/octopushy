@@ -19,14 +19,29 @@ public class AttemptLogCountTests(PostgresFixture postgres) : IClassFixture<Post
             db.Agents.Add(new AgentRecord { Id = agentId, Name = "counter", CertificateSerial = "counter" });
             var run = new Run
             {
-                Id = runId, ResourceId = Guid.NewGuid(), Operation = Operations.Provision, Reason = "manual", Status = RunStatuses.Running,
-                Commit = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f", Context = """{"address":"lab/guest","proxmox":{"endpoint":"https://pve.invalid:8006","verifyTls":true}}""", CreatedAt = DateTimeOffset.UtcNow, StartedAt = DateTimeOffset.UtcNow,
+                Id = runId,
+                ResourceId = Guid.NewGuid(),
+                Operation = Operations.Provision,
+                Reason = "manual",
+                Status = RunStatuses.Running,
+                Commit = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+                Context = """{"address":"lab/guest","proxmox":{"endpoint":"https://pve.invalid:8006","verifyTls":true}}""",
+                CreatedAt = DateTimeOffset.UtcNow,
+                StartedAt = DateTimeOffset.UtcNow,
             };
             var step = new Step { Id = stepId, RunId = runId, Name = StepNames.Plan, Kind = StepKinds.Agent, Status = StepStatuses.Running };
             step.Attempts.Add(new Attempt
             {
-                Id = attemptId, StepId = stepId, RunId = runId, Number = 1, Executor = "opentofu", Action = "plan", AgentId = agentId,
-                Status = AttemptStatuses.Running, CreatedAt = DateTimeOffset.UtcNow, StartedAt = DateTimeOffset.UtcNow,
+                Id = attemptId,
+                StepId = stepId,
+                RunId = runId,
+                Number = 1,
+                Executor = "opentofu",
+                Action = "plan",
+                AgentId = agentId,
+                Status = AttemptStatuses.Running,
+                CreatedAt = DateTimeOffset.UtcNow,
+                StartedAt = DateTimeOffset.UtcNow,
             });
             run.Steps.Add(step);
             db.Runs.Add(run);

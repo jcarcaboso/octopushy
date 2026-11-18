@@ -469,7 +469,9 @@ public class AttemptMaskingTests(PostgresFixture postgres) : IClassFixture<Postg
         {
             db.Observations.Add(new Observation
             {
-                Id = Guid.CreateVersion7(), ResourceId = installation.Id, ObservedAt = DateTimeOffset.UtcNow.AddMinutes(1),
+                Id = Guid.CreateVersion7(),
+                ResourceId = installation.Id,
+                ObservedAt = DateTimeOffset.UtcNow.AddMinutes(1),
                 Data = """{"guests": [{"vmid": "***", "name": "masked", "host": "korriban"}]}""",
             });
             await db.SaveChangesAsync();
@@ -481,7 +483,9 @@ public class AttemptMaskingTests(PostgresFixture postgres) : IClassFixture<Postg
         {
             db.Observations.Add(new Observation
             {
-                Id = Guid.CreateVersion7(), ResourceId = installation.Id, ObservedAt = DateTimeOffset.UtcNow.AddMinutes(2),
+                Id = Guid.CreateVersion7(),
+                ResourceId = installation.Id,
+                ObservedAt = DateTimeOffset.UtcNow.AddMinutes(2),
                 Data = """{"guests": [{"vmid": null, "host": "korriban"}]}""",
             });
             await db.SaveChangesAsync();

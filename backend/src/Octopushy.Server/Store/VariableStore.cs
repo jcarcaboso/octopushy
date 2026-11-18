@@ -144,7 +144,11 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         var (ciphertext, wrapped) = envelope.Seal(Encoding.UTF8.GetBytes(value), Context(key, version));
         db.StoreVersions.Add(new StoreVersion
         {
-            Key = key, Version = version, Ciphertext = ciphertext, WrappedKey = wrapped, CreatedAt = now,
+            Key = key,
+            Version = version,
+            Ciphertext = ciphertext,
+            WrappedKey = wrapped,
+            CreatedAt = now,
         });
         await SaveAsync(cancellationToken);
         return version;

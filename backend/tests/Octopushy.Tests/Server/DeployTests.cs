@@ -157,7 +157,10 @@ public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
                 var installation = await db.Resources.FirstAsync(r => r.Address == Installation);
                 db.Observations.Add(new Observation
                 {
-                    Id = Guid.CreateVersion7(), ResourceId = installation.Id, ObservedAt = at ?? DateTimeOffset.UtcNow, Data = data.ToJsonString(),
+                    Id = Guid.CreateVersion7(),
+                    ResourceId = installation.Id,
+                    ObservedAt = at ?? DateTimeOffset.UtcNow,
+                    Data = data.ToJsonString(),
                 });
                 await db.SaveChangesAsync();
             });
@@ -352,7 +355,9 @@ public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
             var installation = await db.Resources.FirstAsync(r => r.Address == Installation);
             db.Observations.Add(new Observation
             {
-                Id = Guid.CreateVersion7(), ResourceId = installation.Id, ObservedAt = DateTimeOffset.UtcNow,
+                Id = Guid.CreateVersion7(),
+                ResourceId = installation.Id,
+                ObservedAt = DateTimeOffset.UtcNow,
                 Data = new JsonObject
                 {
                     ["cluster"] = null,
@@ -366,16 +371,33 @@ public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
             // Another deploy that is committed and not settled holds its VMID.
             db.Changes.Add(new ResourceChange
             {
-                Id = Guid.CreateVersion7(), Kind = ChangeKinds.CreateGuest, ResourceKind = ResourceKinds.Guest, Address = "home/korriban/other-01",
-                Author = "ops", BaseCommit = new string('a', 40), Message = "other-01: deploy", Commit = new string('b', 40), Vmid = 312,
-                Status = ChangeStatuses.Committed, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+                Id = Guid.CreateVersion7(),
+                Kind = ChangeKinds.CreateGuest,
+                ResourceKind = ResourceKinds.Guest,
+                Address = "home/korriban/other-01",
+                Author = "ops",
+                BaseCommit = new string('a', 40),
+                Message = "other-01: deploy",
+                Commit = new string('b', 40),
+                Vmid = 312,
+                Status = ChangeStatuses.Committed,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
             });
             // One that was refused holds nothing.
             db.Changes.Add(new ResourceChange
             {
-                Id = Guid.CreateVersion7(), Kind = ChangeKinds.CreateGuest, ResourceKind = ResourceKinds.Guest, Address = "home/korriban/gone-01",
-                Author = "ops", BaseCommit = new string('a', 40), Message = "gone-01: deploy", Vmid = 313,
-                Status = ChangeStatuses.Refused, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+                Id = Guid.CreateVersion7(),
+                Kind = ChangeKinds.CreateGuest,
+                ResourceKind = ResourceKinds.Guest,
+                Address = "home/korriban/gone-01",
+                Author = "ops",
+                BaseCommit = new string('a', 40),
+                Message = "gone-01: deploy",
+                Vmid = 313,
+                Status = ChangeStatuses.Refused,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
             });
             await db.SaveChangesAsync();
         });
@@ -431,7 +453,8 @@ public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
             {
                 ["enroll_token"] = new(Generate: SecretGenerators.AgentEnrollmentToken, Labels: ["home", "worker"], Name: "worker-new"),
                 ["admin_password"] = new(Generate: SecretGenerators.RandomPassword),
-            }) with { AccessUser = "ops", HostKey = "proxmox/korriban/new-01/host-key" };
+            }) with
+        { AccessUser = "ops", HostKey = "proxmox/korriban/new-01/host-key" };
         var preview = await PreviewAsync(setup, request);
         Assert.True(preview.Valid, string.Join("; ", preview.Issues.Select(i => i.Message)));
         const string Key = "proxmox/korriban/new-01/enroll_token";
@@ -509,7 +532,8 @@ public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
         var head = setup.RemoteHead;
         var refused = await RefusedAsync(setup, Guest(head, 320, workflow: "agent-vm@1",
             secrets: new Dictionary<string, SecretChoice> { ["enroll_token"] = new(Generate: SecretGenerators.AgentEnrollmentToken) })
-            with { Template = null, Inputs = new JsonObject { ["ansible_host"] = "elsewhere" } });
+            with
+        { Template = null, Inputs = new JsonObject { ["ansible_host"] = "elsewhere" } });
         Assert.Equal(ChangeRefusal.Reasons.Invalid, refused.Reason);
         Assert.Equal(head, setup.RemoteHead);
         Assert.False(await setup.Server.QueryAsync(db => db.StoreEntries.AnyAsync(e => e.Key.StartsWith("proxmox/korriban/new-01/"))));
@@ -566,7 +590,8 @@ public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
 
         var refused = await RefusedAsync(setup, Guest(setup.RemoteHead, 320, workflow: "agent-vm@1",
             secrets: new Dictionary<string, SecretChoice> { ["enroll_token"] = new(Generate: SecretGenerators.AgentEnrollmentToken) })
-            with { Template = null, Inputs = new JsonObject { ["ansible_host"] = "elsewhere" } });
+            with
+        { Template = null, Inputs = new JsonObject { ["ansible_host"] = "elsewhere" } });
         Assert.Equal(ChangeRefusal.Reasons.Invalid, refused.Reason);
         var value = await setup.Server.QueryAsync(db => db.GeneratedValues.AsNoTracking().SingleAsync(v => v.Key == Key));
         Assert.Equal(2, value.StoreVersion);
@@ -593,8 +618,17 @@ public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
             var now = DateTimeOffset.UtcNow.AddMinutes(-1);
             db.Changes.Add(new ResourceChange
             {
-                Id = id, Kind = ChangeKinds.CreateGuest, ResourceKind = ResourceKinds.Guest, Address = address, Author = "ops",
-                BaseCommit = setup.RemoteHead, Message = "deploy", Status = status, Vmid = vmid, CreatedAt = now, UpdatedAt = now,
+                Id = id,
+                Kind = ChangeKinds.CreateGuest,
+                ResourceKind = ResourceKinds.Guest,
+                Address = address,
+                Author = "ops",
+                BaseCommit = setup.RemoteHead,
+                Message = "deploy",
+                Status = status,
+                Vmid = vmid,
+                CreatedAt = now,
+                UpdatedAt = now,
                 CandidateCommits = status == ChangeStatuses.Committing ? [] : [new string('c', 40)],
             });
             if (token)
@@ -608,8 +642,17 @@ public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
 
             db.GeneratedValues.Add(new GeneratedValue
             {
-                Id = generation, ChangeId = id, Secret = "enroll_token", Key = key, Generator = SecretGenerators.AgentEnrollmentToken,
-                State = GeneratedValueStates.Created, StoreVersion = 1, StoreDescription = marker, TokenId = tokenId, CreatedAt = now, UpdatedAt = now,
+                Id = generation,
+                ChangeId = id,
+                Secret = "enroll_token",
+                Key = key,
+                Generator = SecretGenerators.AgentEnrollmentToken,
+                State = GeneratedValueStates.Created,
+                StoreVersion = 1,
+                StoreDescription = marker,
+                TokenId = tokenId,
+                CreatedAt = now,
+                UpdatedAt = now,
             });
             await db.SaveChangesAsync();
         });
@@ -832,9 +875,18 @@ public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
             var now = DateTimeOffset.UtcNow;
             db.Changes.Add(new ResourceChange
             {
-                Id = Guid.CreateVersion7(), Kind = ChangeKinds.Edit, ResourceKind = ResourceKinds.Guest, Address = "home/korriban/other-01", Author = "ops",
-                BaseCommit = referencing, Message = "other-01: edit", Status = ChangeStatuses.Uncertain, Files = [File], CandidateCommits = [referencing],
-                CreatedAt = now, UpdatedAt = now,
+                Id = Guid.CreateVersion7(),
+                Kind = ChangeKinds.Edit,
+                ResourceKind = ResourceKinds.Guest,
+                Address = "home/korriban/other-01",
+                Author = "ops",
+                BaseCommit = referencing,
+                Message = "other-01: edit",
+                Status = ChangeStatuses.Uncertain,
+                Files = [File],
+                CandidateCommits = [referencing],
+                CreatedAt = now,
+                UpdatedAt = now,
             });
             await db.SaveChangesAsync();
         });
@@ -856,9 +908,19 @@ public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
             var now = DateTimeOffset.UtcNow;
             db.Changes.Add(new ResourceChange
             {
-                Id = Guid.CreateVersion7(), Kind = ChangeKinds.CreateGuest, ResourceKind = ResourceKinds.Guest, Address = "home/korriban/lost-01",
-                Author = "ops", BaseCommit = setup.RemoteHead, Message = "lost-01: deploy", Status = ChangeStatuses.Unknown, Files = [NewFile],
-                CandidateCommits = [new string('e', 40)], Edited = new JsonObject { ["secrets"] = new JsonObject { ["enroll_token"] = new JsonObject { ["store"] = Key } } }.ToJsonString(), CreatedAt = now, UpdatedAt = now,
+                Id = Guid.CreateVersion7(),
+                Kind = ChangeKinds.CreateGuest,
+                ResourceKind = ResourceKinds.Guest,
+                Address = "home/korriban/lost-01",
+                Author = "ops",
+                BaseCommit = setup.RemoteHead,
+                Message = "lost-01: deploy",
+                Status = ChangeStatuses.Unknown,
+                Files = [NewFile],
+                CandidateCommits = [new string('e', 40)],
+                Edited = new JsonObject { ["secrets"] = new JsonObject { ["enroll_token"] = new JsonObject { ["store"] = Key } } }.ToJsonString(),
+                CreatedAt = now,
+                UpdatedAt = now,
             });
             await db.SaveChangesAsync();
         });
@@ -886,9 +948,20 @@ public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
             var now = DateTimeOffset.UtcNow;
             db.Changes.Add(new ResourceChange
             {
-                Id = Guid.CreateVersion7(), Kind = ChangeKinds.Edit, ResourceKind = ResourceKinds.Guest, Address = Existing, Author = "ops",
-                BaseCommit = setup.RemoteHead, Message = "krb-app-01: cores 2 → 4", Status = ChangeStatuses.Unknown, Files = [GuestFile],
-                CandidateCommits = [new string('e', 40)], Edited = composed.Edited!.ToJsonString(), StoreKeys = storeKeys, CreatedAt = now, UpdatedAt = now,
+                Id = Guid.CreateVersion7(),
+                Kind = ChangeKinds.Edit,
+                ResourceKind = ResourceKinds.Guest,
+                Address = Existing,
+                Author = "ops",
+                BaseCommit = setup.RemoteHead,
+                Message = "krb-app-01: cores 2 → 4",
+                Status = ChangeStatuses.Unknown,
+                Files = [GuestFile],
+                CandidateCommits = [new string('e', 40)],
+                Edited = composed.Edited!.ToJsonString(),
+                StoreKeys = storeKeys,
+                CreatedAt = now,
+                UpdatedAt = now,
             });
             await db.SaveChangesAsync();
         });
@@ -928,8 +1001,17 @@ public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
             var now = DateTimeOffset.UtcNow;
             db.Changes.Add(new ResourceChange
             {
-                Id = Guid.CreateVersion7(), Kind = ChangeKinds.CreateGuest, ResourceKind = ResourceKinds.Guest, Address = "home/korriban/held-01",
-                Author = "ops", BaseCommit = setup.RemoteHead, Message = "deploy", Status = status, Vmid = 360, CreatedAt = now, UpdatedAt = now,
+                Id = Guid.CreateVersion7(),
+                Kind = ChangeKinds.CreateGuest,
+                ResourceKind = ResourceKinds.Guest,
+                Address = "home/korriban/held-01",
+                Author = "ops",
+                BaseCommit = setup.RemoteHead,
+                Message = "deploy",
+                Status = status,
+                Vmid = 360,
+                CreatedAt = now,
+                UpdatedAt = now,
             });
             await db.SaveChangesAsync();
         });
@@ -954,10 +1036,20 @@ public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
         {
             db.Changes.Add(new ResourceChange
             {
-                Id = id, Kind = ChangeKinds.CreateGuest, ResourceKind = ResourceKinds.Guest, Address = NewGuest, Author = "ops",
-                BaseCommit = preview.BaseCommit, Message = preview.Subject, Commit = deployed, Status = ChangeStatuses.Committed, Vmid = 311,
+                Id = id,
+                Kind = ChangeKinds.CreateGuest,
+                ResourceKind = ResourceKinds.Guest,
+                Address = NewGuest,
+                Author = "ops",
+                BaseCommit = preview.BaseCommit,
+                Message = preview.Subject,
+                Commit = deployed,
+                Status = ChangeStatuses.Committed,
+                Vmid = 311,
                 Edited = """{"host":"korriban","vmid":311,"workflow":"test-vm@1","hardware":{"cores":2,"memory":2048},"network":{"bridge":"vmbr0","mode":"static","address":"10.1.0.40/24","gateway":"10.1.0.1"}}""",
-                PreApproval = PreApprovals.Requested, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+                PreApproval = PreApprovals.Requested,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
             });
             await db.SaveChangesAsync();
         });
@@ -1114,8 +1206,11 @@ public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
         // One that does not record its connection, as before this release, is no evidence either.
         await setup.ObserveRawAsync(new JsonObject
         {
-            ["connection"] = null, ["cluster"] = null, ["vmVisibility"] = new JsonObject { ["complete"] = true },
-            ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = true }), ["guests"] = new JsonArray(),
+            ["connection"] = null,
+            ["cluster"] = null,
+            ["vmVisibility"] = new JsonObject { ["complete"] = true },
+            ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = true }),
+            ["guests"] = new JsonArray(),
         });
         Assert.Contains("does not record the connection it went through",
             (await setup.Client.GetFromJsonAsync<NextVmidDto>($"/api/deploy/vmid?installation={Installation}"))!.Problem);
@@ -1128,8 +1223,10 @@ public class DeployTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
         var observe = await setup.Agent!.NextAsync("observe");
         await setup.Agent.ReportAsync(observe, Outcome.Succeeded, new JsonObject
         {
-            ["cluster"] = null, ["vmVisibility"] = new JsonObject { ["complete"] = true },
-            ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = true }), ["guests"] = new JsonArray(),
+            ["cluster"] = null,
+            ["vmVisibility"] = new JsonObject { ["complete"] = true },
+            ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = true }),
+            ["guests"] = new JsonArray(),
         });
         var data = await setup.Server.QueryAsync(async db => JsonNode.Parse((await db.Observations.AsNoTracking().SingleAsync()).Data)!);
         Assert.Equal("https://10.1.0.10:8006", data["connection"]!["endpoint"]!.GetValue<string>());

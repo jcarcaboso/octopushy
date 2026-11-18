@@ -33,15 +33,15 @@ public class WorkerRoutingTests(PostgresFixture postgres) : IClassFixture<Postgr
 
     private static RunContext Context(OpenTofuContext? tofu = null, AnsibleContext? ansible = null, SnippetsContext? snippets = null,
         IReadOnlyList<StageContext>? stages = null, Dictionary<string, string>? secrets = null) => new()
-    {
-        Address = Guest,
-        Proxmox = Proxmox(),
-        OpenTofu = tofu,
-        Ansible = ansible,
-        Snippets = snippets,
-        Stages = stages,
-        Secrets = secrets ?? new() { [SecretNames.ProxmoxReadOnlyToken] = "proxmox/korriban/read-only-token", [SecretNames.ProxmoxPrivilegedToken] = "proxmox/korriban/privileged-token" },
-    };
+        {
+            Address = Guest,
+            Proxmox = Proxmox(),
+            OpenTofu = tofu,
+            Ansible = ansible,
+            Snippets = snippets,
+            Stages = stages,
+            Secrets = secrets ?? new() { [SecretNames.ProxmoxReadOnlyToken] = "proxmox/korriban/read-only-token", [SecretNames.ProxmoxPrivilegedToken] = "proxmox/korriban/privileged-token" },
+        };
 
     /// <summary>Answers every probe sent to <paramref name="agent"/> with what <paramref name="status"/> says of it, or leaves it unanswered for null.</summary>
     private static async Task AnswerAsync(FakeAgent agent, Func<ReachabilityProbe, string?> status, byte[]? certificate = null)

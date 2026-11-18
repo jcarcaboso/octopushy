@@ -47,6 +47,9 @@ jobs:
         run: |
           dotnet run --project backend/src/Octopushy.Validate -- examples/lab
           dotnet run --project backend/src/Octopushy.Validate -- tests/e2e/lab
+      - name: C# formatting (dotnet format)
+        if: ${{ !cancelled() }}
+        run: dotnet format backend/Octopushy.slnx --verify-no-changes
       - name: OpenAPI document drift
         if: ${{ !cancelled() }}
         run: |

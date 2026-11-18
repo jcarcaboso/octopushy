@@ -173,7 +173,8 @@ public class VmidCollisionTests(PostgresFixture postgres) : IClassFixture<Postgr
         Assert.Null((await server.ResourceAsync(Guest)).BoundVmid);
         await agent.ReportAsync(await agent.NextAsync("verify-guest"), Outcome.Succeeded, new JsonObject
         {
-            ["node"] = "korriban", ["tags"] = new JsonArray("home", "octopushy"),
+            ["node"] = "korriban",
+            ["tags"] = new JsonArray("home", "octopushy"),
             ["description"] = "Managed by Octopushy as home/korriban/krb-app-01.",
         });
 
@@ -326,7 +327,10 @@ public class VmidCollisionTests(PostgresFixture postgres) : IClassFixture<Postgr
                     ["hosts"] = new JsonArray(new JsonObject { ["name"] = "korriban", ["online"] = true }),
                     ["guests"] = new JsonArray(vms.Select(vm => (JsonNode)new JsonObject
                     {
-                        ["vmid"] = vm.Vmid, ["name"] = vm.Name, ["host"] = "korriban", ["status"] = "running",
+                        ["vmid"] = vm.Vmid,
+                        ["name"] = vm.Name,
+                        ["host"] = "korriban",
+                        ["status"] = "running",
                     }).ToArray()),
                 }.ToJsonString(),
             });

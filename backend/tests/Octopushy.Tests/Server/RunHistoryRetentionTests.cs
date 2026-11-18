@@ -90,14 +90,23 @@ public class RunHistoryRetentionTests(PostgresFixture postgres) : IClassFixture<
             db.Runs.AddRange(runs);
             db.Changes.Add(new ResourceChange
             {
-                Id = Guid.NewGuid(), Kind = ChangeKinds.Edit, ResourceKind = ResourceKinds.Guest,
-                Address = "test", Author = "ops", BaseCommit = "base", Message = "test",
-                RunIds = [runs[3].Id], PreApprovalRunId = runs[4].Id,
+                Id = Guid.NewGuid(),
+                Kind = ChangeKinds.Edit,
+                ResourceKind = ResourceKinds.Guest,
+                Address = "test",
+                Author = "ops",
+                BaseCommit = "base",
+                Message = "test",
+                RunIds = [runs[3].Id],
+                PreApprovalRunId = runs[4].Id,
             });
             db.GuestSchedules.Add(new GuestScheduleState { ResourceId = resource.Id, Action = "test", Cron = "* * * * *", LastRunId = runs[5].Id });
             db.Steps.Add(new Step
             {
-                Id = Guid.NewGuid(), RunId = runs[6].Id, Name = "approval", Kind = StepKinds.Approval,
+                Id = Guid.NewGuid(),
+                RunId = runs[6].Id,
+                Name = "approval",
+                Kind = StepKinds.Approval,
                 Status = StepStatuses.AwaitingApproval,
             });
             await db.SaveChangesAsync();
@@ -173,7 +182,12 @@ public class RunHistoryRetentionTests(PostgresFixture postgres) : IClassFixture<
 
     private static Run Finished(Guid resource, DateTimeOffset when) => new()
     {
-        Id = Guid.NewGuid(), ResourceId = resource, Operation = "test", Reason = "manual",
-        Status = RunStatuses.Succeeded, CreatedAt = when, FinishedAt = when,
+        Id = Guid.NewGuid(),
+        ResourceId = resource,
+        Operation = "test",
+        Reason = "manual",
+        Status = RunStatuses.Succeeded,
+        CreatedAt = when,
+        FinishedAt = when,
     };
 }

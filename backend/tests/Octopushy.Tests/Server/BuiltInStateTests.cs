@@ -228,7 +228,9 @@ public class BuiltInStateTests(PostgresFixture postgres) : IClassFixture<Postgre
         var bytes = Encoding.UTF8.GetBytes(content);
         await agent.ReportAsync(await agent.NextAsync("apply"), Outcome.Succeeded, Applied(), artifacts: new Artifact
         {
-            Name = TofuStateStore.ArtifactName, Content = ByteString.CopyFrom(bytes), Sha256 = ArtifactStore.Sha256(bytes),
+            Name = TofuStateStore.ArtifactName,
+            Content = ByteString.CopyFrom(bytes),
+            Sha256 = ArtifactStore.Sha256(bytes),
         });
 
         await server.TickAsync();
@@ -397,8 +399,14 @@ public class BuiltInStateTests(PostgresFixture postgres) : IClassFixture<Postgre
             var head = await db.TofuStateVersions.AsNoTracking().SingleAsync(v => v.ResourceId == resource);
             db.TofuStateVersions.Add(new TofuStateVersion
             {
-                Id = Guid.CreateVersion7(), ResourceId = resource, Version = 2, Serial = 9, Lineage = head.Lineage,
-                Sha256 = head.Sha256, Ciphertext = head.Ciphertext, WrappedKey = head.WrappedKey,
+                Id = Guid.CreateVersion7(),
+                ResourceId = resource,
+                Version = 2,
+                Serial = 9,
+                Lineage = head.Lineage,
+                Sha256 = head.Sha256,
+                Ciphertext = head.Ciphertext,
+                WrappedKey = head.WrappedKey,
             });
             await db.SaveChangesAsync();
         });

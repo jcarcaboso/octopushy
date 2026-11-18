@@ -92,9 +92,20 @@ internal static class ApprovalPins
             var now = DateTimeOffset.UtcNow;
             db.Changes.Add(new ResourceChange
             {
-                Id = id, Kind = kind, ResourceKind = resourceKind, ResourceId = resource.Id, Address = address,
-                Author = "ops", BaseCommit = head.Commit, Message = "deploy", Commit = head.Commit, RevisionId = head.Id,
-                Status = ChangeStatuses.Synced, PreApproval = PreApprovals.Requested, CreatedAt = now, UpdatedAt = now,
+                Id = id,
+                Kind = kind,
+                ResourceKind = resourceKind,
+                ResourceId = resource.Id,
+                Address = address,
+                Author = "ops",
+                BaseCommit = head.Commit,
+                Message = "deploy",
+                Commit = head.Commit,
+                RevisionId = head.Id,
+                Status = ChangeStatuses.Synced,
+                PreApproval = PreApprovals.Requested,
+                CreatedAt = now,
+                UpdatedAt = now,
             });
             await db.SaveChangesAsync();
             return id;

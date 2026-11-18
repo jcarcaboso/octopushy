@@ -86,12 +86,12 @@ public sealed class AttemptLogIndexTests : IDisposable
         foreach (var store in new[] { writer, Store(attempt) })
         {
             foreach (var after in afters)
-            foreach (var limit in limits)
-            {
-                var expected = FullScan(PathOf(attempt), after, limit);
-                var actual = await store.ReadAsync(attempt, after, limit, CancellationToken.None);
-                Assert.True(expected.SequenceEqual(actual), $"after {after}, limit {limit}: {actual.Count} lines, not {expected.Count}");
-            }
+                foreach (var limit in limits)
+                {
+                    var expected = FullScan(PathOf(attempt), after, limit);
+                    var actual = await store.ReadAsync(attempt, after, limit, CancellationToken.None);
+                    Assert.True(expected.SequenceEqual(actual), $"after {after}, limit {limit}: {actual.Count} lines, not {expected.Count}");
+                }
         }
     }
 

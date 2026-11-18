@@ -162,10 +162,19 @@ public sealed class TofuStateStore(OctopushyDb db, Envelope envelope, TimeProvid
             .OrderByDescending(v => v.Version)
             .Select(v => new TofuStateVersion
             {
-                Version = v.Version, Serial = v.Serial, Lineage = v.Lineage, ResourceCount = v.ResourceCount,
-                Sha256 = v.Sha256, Size = v.Size, Ciphertext = Array.Empty<byte>(), WrappedKey = Array.Empty<byte>(),
-                AttemptId = v.AttemptId, RestoredFrom = v.RestoredFrom, RestoredBy = v.RestoredBy,
-                CreatedAt = v.CreatedAt, UpdatedAt = v.UpdatedAt,
+                Version = v.Version,
+                Serial = v.Serial,
+                Lineage = v.Lineage,
+                ResourceCount = v.ResourceCount,
+                Sha256 = v.Sha256,
+                Size = v.Size,
+                Ciphertext = Array.Empty<byte>(),
+                WrappedKey = Array.Empty<byte>(),
+                AttemptId = v.AttemptId,
+                RestoredFrom = v.RestoredFrom,
+                RestoredBy = v.RestoredBy,
+                CreatedAt = v.CreatedAt,
+                UpdatedAt = v.UpdatedAt,
             })
             .ToListAsync(cancellationToken);
         var held = state?.LockAttemptId is { } holder && await IsRunningAsync(holder, cancellationToken);

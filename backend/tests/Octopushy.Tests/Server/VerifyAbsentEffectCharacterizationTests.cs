@@ -66,8 +66,13 @@ public class VerifyAbsentEffectCharacterizationTests(PostgresFixture postgres) :
             {
                 var run = new Run
                 {
-                    Id = Guid.CreateVersion7(), ResourceId = id, Operation = Operations.Pipeline, Reason = "manual", Status = status,
-                    CreatedAt = now.AddSeconds(i), Context = context,
+                    Id = Guid.CreateVersion7(),
+                    ResourceId = id,
+                    Operation = Operations.Pipeline,
+                    Reason = "manual",
+                    Status = status,
+                    CreatedAt = now.AddSeconds(i),
+                    Context = context,
                 };
                 db.Runs.Add(run);
                 // A run that waits has an approval that waits for a person, as a pipeline's does.

@@ -644,8 +644,14 @@ public sealed class AgentUpdates(
                 throw;
             }
 
-            return new { next.Id, Resource = (Guid?)assessment.Guest!.ResourceId, Actor = next.UpdateRequestedBy ?? "octopushy",
-                Version = next.UpdateTargetVersion!, Refused = (string?)null };
+            return new
+            {
+                next.Id,
+                Resource = (Guid?)assessment.Guest!.ResourceId,
+                Actor = next.UpdateRequestedBy ?? "octopushy",
+                Version = next.UpdateTargetVersion!,
+                Refused = (string?)null
+            };
         }, ct);
         if (claimed is null)
             return null;

@@ -66,20 +66,62 @@ public class InstallationDeletionTests(PostgresFixture postgres) : IClassFixture
         await server.WithDbAsync(async db =>
         {
             db.Resources.AddRange(
-                new Resource { Id = serviceId, Kind = ResourceKinds.Service, Address = guest.Address + "/web",
-                    ParentAddress = guest.Address, Lab = "home", MissingSince = now },
-                new Resource { Id = retiredId, Kind = ResourceKinds.Guest, Address = Address + "/old",
-                    ParentAddress = Address, Lab = "home", RetiredAt = now },
-                new Resource { Id = movedId, Kind = ResourceKinds.Guest, Address = "home/elsewhere/old",
-                    Lab = "home", RetiredAt = now, BoundInstallation = Address },
-                new Resource { Id = movedServiceId, Kind = ResourceKinds.Service, Address = "home/elsewhere/old/web",
-                    ParentAddress = "home/elsewhere/old", Lab = "home", MissingSince = now },
+                new Resource
+                {
+                    Id = serviceId,
+                    Kind = ResourceKinds.Service,
+                    Address = guest.Address + "/web",
+                    ParentAddress = guest.Address,
+                    Lab = "home",
+                    MissingSince = now
+                },
+                new Resource
+                {
+                    Id = retiredId,
+                    Kind = ResourceKinds.Guest,
+                    Address = Address + "/old",
+                    ParentAddress = Address,
+                    Lab = "home",
+                    RetiredAt = now
+                },
+                new Resource
+                {
+                    Id = movedId,
+                    Kind = ResourceKinds.Guest,
+                    Address = "home/elsewhere/old",
+                    Lab = "home",
+                    RetiredAt = now,
+                    BoundInstallation = Address
+                },
+                new Resource
+                {
+                    Id = movedServiceId,
+                    Kind = ResourceKinds.Service,
+                    Address = "home/elsewhere/old/web",
+                    ParentAddress = "home/elsewhere/old",
+                    Lab = "home",
+                    MissingSince = now
+                },
                 new Resource { Id = otherId, Kind = ResourceKinds.Installation, Address = Address + "-other", Lab = "home" });
-            db.Runs.Add(new Run { Id = runId, ResourceId = serviceId, Operation = Operations.Pipeline,
-                Reason = "manual", Status = RunStatuses.Failed });
+            db.Runs.Add(new Run
+            {
+                Id = runId,
+                ResourceId = serviceId,
+                Operation = Operations.Pipeline,
+                Reason = "manual",
+                Status = RunStatuses.Failed
+            });
             db.Steps.Add(new Step { Id = stepId, RunId = runId, Name = "apply", Kind = StepKinds.Agent });
-            db.Attempts.Add(new Attempt { Id = attemptId, StepId = stepId, AgentId = agentId,
-                Executor = "opentofu", Action = "apply", Status = AttemptStatuses.Uncertain, Mutating = true });
+            db.Attempts.Add(new Attempt
+            {
+                Id = attemptId,
+                StepId = stepId,
+                AgentId = agentId,
+                Executor = "opentofu",
+                Action = "apply",
+                Status = AttemptStatuses.Uncertain,
+                Mutating = true
+            });
             db.Artifacts.Add(new ArtifactRecord { Id = Guid.NewGuid(), AttemptId = attemptId, Name = "plan", Sha256 = "abc" });
             db.SecretResolutions.Add(new SecretResolution { AttemptId = attemptId, AgentId = agentId, Key = "shared", Version = 1 });
             db.Observations.Add(new Observation { Id = Guid.NewGuid(), ResourceId = installation.Id, Data = "{}" });
@@ -88,15 +130,44 @@ public class InstallationDeletionTests(PostgresFixture postgres) : IClassFixture
             db.ServiceIcons.Add(new ServiceIcon { ResourceId = serviceId, Name = "web.svg" });
             db.RevisionIssues.Add(new RevisionIssues { ResourceId = guest.Id, RevisionId = Guid.NewGuid(), Issues = "[]" });
             db.TofuStates.Add(new TofuState { ResourceId = serviceId });
-            db.TofuStateVersions.Add(new TofuStateVersion { Id = Guid.NewGuid(), ResourceId = serviceId,
-                Version = 1, Lineage = "lineage", Sha256 = "abc", Ciphertext = [1], WrappedKey = [2] });
-            db.Changes.Add(new ResourceChange { Id = changeId, Kind = ChangeKinds.Remove, ResourceKind = ResourceKinds.Guest,
-                ResourceId = guest.Id, Address = guest.Address, Author = "ops", BaseCommit = "abc", Message = "Remove" });
-            db.GeneratedValues.Add(new GeneratedValue { Id = Guid.NewGuid(), ChangeId = changeId, Secret = "enrollment",
-                Key = "old/enrollment", Generator = "agent-enrollment-token", StoreDescription = "Generated", TokenId = tokenId });
+            db.TofuStateVersions.Add(new TofuStateVersion
+            {
+                Id = Guid.NewGuid(),
+                ResourceId = serviceId,
+                Version = 1,
+                Lineage = "lineage",
+                Sha256 = "abc",
+                Ciphertext = [1],
+                WrappedKey = [2]
+            });
+            db.Changes.Add(new ResourceChange
+            {
+                Id = changeId,
+                Kind = ChangeKinds.Remove,
+                ResourceKind = ResourceKinds.Guest,
+                ResourceId = guest.Id,
+                Address = guest.Address,
+                Author = "ops",
+                BaseCommit = "abc",
+                Message = "Remove"
+            });
+            db.GeneratedValues.Add(new GeneratedValue
+            {
+                Id = Guid.NewGuid(),
+                ChangeId = changeId,
+                Secret = "enrollment",
+                Key = "old/enrollment",
+                Generator = "agent-enrollment-token",
+                StoreDescription = "Generated",
+                TokenId = tokenId
+            });
             db.EnrollmentTokens.Add(new EnrollmentToken { Id = tokenId, TokenHash = "old-token" });
-            db.InstallationSnippetKeys.Add(new InstallationSnippetKey { Installation = Address,
-                PublicKey = "ssh-ed25519 public", Fingerprint = "fingerprint" });
+            db.InstallationSnippetKeys.Add(new InstallationSnippetKey
+            {
+                Installation = Address,
+                PublicKey = "ssh-ed25519 public",
+                Fingerprint = "fingerprint"
+            });
             await db.SaveChangesAsync();
             await UptimeMonitor.RecordAsync(db, ownKey, false, null, null, null, now, CancellationToken.None);
             await UptimeMonitor.RecordAsync(db, oldKey, false, null, null, null, now, CancellationToken.None);
@@ -174,8 +245,15 @@ public class InstallationDeletionTests(PostgresFixture postgres) : IClassFixture
         var attemptId = Guid.NewGuid();
         await server.WithDbAsync(async db =>
         {
-            db.Attempts.Add(new Attempt { Id = attemptId, ResourceId = guest.Id, Executor = "opentofu",
-                Action = "apply", Status = AttemptStatuses.Running, Mutating = true });
+            db.Attempts.Add(new Attempt
+            {
+                Id = attemptId,
+                ResourceId = guest.Id,
+                Executor = "opentofu",
+                Action = "apply",
+                Status = AttemptStatuses.Running,
+                Mutating = true
+            });
             await db.SaveChangesAsync();
         });
         using var client = await server.SignedInClientAsync();
@@ -199,9 +277,17 @@ public class InstallationDeletionTests(PostgresFixture postgres) : IClassFixture
         await server.SyncAsync();
         await server.WithDbAsync(async db =>
         {
-            db.Changes.Add(new ResourceChange { Id = Guid.NewGuid(), Kind = ChangeKinds.CreateGuest,
-                ResourceKind = ResourceKinds.Guest, Address = Address + "/new", Author = "ops",
-                BaseCommit = "abc", Message = "Create", Status = status });
+            db.Changes.Add(new ResourceChange
+            {
+                Id = Guid.NewGuid(),
+                Kind = ChangeKinds.CreateGuest,
+                ResourceKind = ResourceKinds.Guest,
+                Address = Address + "/new",
+                Author = "ops",
+                BaseCommit = "abc",
+                Message = "Create",
+                Status = status
+            });
             await db.SaveChangesAsync();
         });
         using var client = await server.SignedInClientAsync();
@@ -255,7 +341,9 @@ public class InstallationDeletionTests(PostgresFixture postgres) : IClassFixture
         Assert.Empty(monitor.Targets);
         Assert.True(await monitor.AcceptAsync(session, new ReachabilityReport
         {
-            ProbeId = probe.ProbeId, Status = "reachable", ElapsedMs = 1,
+            ProbeId = probe.ProbeId,
+            Status = "reachable",
+            ElapsedMs = 1,
         }, CancellationToken.None));
         clock.Now = clock.Now!.Value.AddMinutes(2);
         await monitor.TickAsync(CancellationToken.None);

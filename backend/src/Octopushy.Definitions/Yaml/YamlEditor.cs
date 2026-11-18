@@ -267,16 +267,16 @@ public static class YamlEditor
                     ReplaceScalar(scalar, desired);
                     return;
                 case YamlScalarNode scalar:
-                {
-                    var start = (int)scalar.Start.Index;
-                    var end = (int)scalar.End.Index;
-                    if (scalar.Style is ScalarStyle.Literal or ScalarStyle.Folded)
-                        end = TrimLineEnd(end);
-                    else if (start == end && start > 0 && text[start - 1] == ':')
-                        rendered = " " + rendered;
-                    Replace(start, end, rendered);
-                    return;
-                }
+                    {
+                        var start = (int)scalar.Start.Index;
+                        var end = (int)scalar.End.Index;
+                        if (scalar.Style is ScalarStyle.Literal or ScalarStyle.Folded)
+                            end = TrimLineEnd(end);
+                        else if (start == end && start > 0 && text[start - 1] == ':')
+                            rendered = " " + rendered;
+                        Replace(start, end, rendered);
+                        return;
+                    }
                 case YamlMappingNode { Style: MappingStyle.Flow }:
                 case YamlSequenceNode { Style: SequenceStyle.Flow }:
                     Replace((int)node.Start.Index, FlowEnd(node), rendered);
