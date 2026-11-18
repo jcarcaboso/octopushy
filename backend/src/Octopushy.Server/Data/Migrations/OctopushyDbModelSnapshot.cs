@@ -94,9 +94,9 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("unavailable");
 
-                    b.Property<DateTimeOffset?>("UpdateAppliedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("update_applied_at");
+                    b.Property<Guid?>("UpdateBaselineConnection")
+                        .HasColumnType("uuid")
+                        .HasColumnName("update_baseline_connection");
 
                     b.Property<Guid?>("UpdateChangeId")
                         .HasColumnType("uuid")
@@ -106,9 +106,33 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("update_detail");
 
+                    b.Property<string>("UpdateFailure")
+                        .HasColumnType("text")
+                        .HasColumnName("update_failure");
+
+                    b.Property<string>("UpdateHold")
+                        .HasColumnType("text")
+                        .HasColumnName("update_hold");
+
+                    b.Property<Guid?>("UpdateHoldAttemptId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("update_hold_attempt_id");
+
                     b.Property<bool>("UpdatePaused")
                         .HasColumnType("boolean")
                         .HasColumnName("update_paused");
+
+                    b.PrimitiveCollection<string[]>("UpdatePreviousExecutors")
+                        .HasColumnType("text[]")
+                        .HasColumnName("update_previous_executors");
+
+                    b.Property<string>("UpdatePreviousVersion")
+                        .HasColumnType("text")
+                        .HasColumnName("update_previous_version");
+
+                    b.Property<DateTimeOffset?>("UpdateReleasedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("update_released_at");
 
                     b.Property<DateTimeOffset?>("UpdateRequestedAt")
                         .HasColumnType("timestamp with time zone")
@@ -117,6 +141,14 @@ namespace Octopushy.Server.Data.Migrations
                     b.Property<string>("UpdateRequestedBy")
                         .HasColumnType("text")
                         .HasColumnName("update_requested_by");
+
+                    b.Property<Guid?>("UpdateResourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("update_resource_id");
+
+                    b.Property<bool>("UpdateRevert")
+                        .HasColumnType("boolean")
+                        .HasColumnName("update_revert");
 
                     b.Property<string>("UpdateState")
                         .HasColumnType("text")

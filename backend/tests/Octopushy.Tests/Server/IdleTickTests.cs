@@ -17,7 +17,7 @@ public class IdleTickTests(PostgresFixture postgres, ITestOutputHelper output) :
     private static readonly DateTimeOffset Start = new(2026, 11, 16, 9, 0, 0, TimeSpan.Zero);
 
     /// <summary>Counts the SQL commands every context of the server sends.</summary>
-    private sealed class CommandCounter : DbCommandInterceptor
+    internal sealed class CommandCounter : DbCommandInterceptor
     {
         private int _count;
 

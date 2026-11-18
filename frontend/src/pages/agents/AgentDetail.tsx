@@ -224,6 +224,14 @@ export function AgentDetail({ agent, id }: { agent: Agent; id: string }) {
               <dd>{update.reason}</dd>
             </div>
           ) : null}
+          {update.previousVersion ? (
+            <div>
+              <dt>Before its last update</dt>
+              <dd>
+                <code>{update.previousVersion}</code>
+              </dd>
+            </div>
+          ) : null}
           <div>
             <dt>Certificate</dt>
             <dd>

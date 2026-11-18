@@ -110,7 +110,7 @@ public sealed partial class AssignmentBuilder(
                 ? step is not null || run is not null || attempt.StepId is not null || attempt.RunId is not null || attempt.ResourceId is null
                 : attempt.RunId != run.Id || step.RunId != run.Id || attempt.StepId != step.Id)
             throw new AssignmentException("The attempt, step and run do not match.");
-        if (await db.Agents.AnyAsync(a => a.Id == agentId && (a.Disabled || a.Draining), cancellationToken))
+        if (await db.Agents.AnyAsync(a => a.Id == agentId && (a.Disabled || a.Draining || a.UpdateState == AgentUpdateStates.Updating), cancellationToken))
             throw new AssignmentException("This agent is disabled or draining and cannot receive new assignments.");
         var invalid = CredentialBindings.Validate(context);
         if (invalid.Count > 0)

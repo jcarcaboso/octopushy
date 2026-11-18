@@ -1,13 +1,35 @@
-import { ArrowUp, Check, LoaderCircle } from "lucide-react";
+import { ArrowUp, Check, LoaderCircle, Undo2 } from "lucide-react";
 import { Link } from "react-router";
-import { useCancelAgentUpdate, useUpdateAgentVersion } from "../../api/queries";
+import { useCancelAgentUpdate, useRevertAgentVersion, useUpdateAgentVersion } from "../../api/queries";
 import type { Agent } from "../../api/types";
+
+/** What an update in flight is doing, by its phase. */
+const phases: Record<string, string> = {
+  "rolling-out": "",
+  "awaiting-approval": "its run waits for approval",
+  blocked: "its run is blocked",
+  "waiting-for-idle": "waiting for its work to finish",
+  "waiting-for-unconfirmed-change": "waiting for it to say a change whose lease ran out has stopped",
+  restarting: "restarting",
+};
+
+/** Why an update failed, in a few words, by its failure; the reason says the rest. */
+const failures: Record<string, string> = {
+  "lost-executors": "lost tools",
+  "did-not-come-back": "not back in time",
+  "other-version": "came back on another version",
+};
+
+function time(at: string) {
+  return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
 
 function Links({ update }: { update: Agent["update"] }) {
   return (
     <>
       {update.changeId ? <Link to={`/changes/${update.changeId}`}>View change</Link> : null}
       {update.runId ? <Link to={`/runs/${update.runId}`}>View run</Link> : null}
+      {update.waitingForRunId ? <Link to={`/runs/${update.waitingForRunId}`}>View the run it waits for</Link> : null}
     </>
   );
 }
@@ -16,8 +38,14 @@ function Links({ update }: { update: Agent["update"] }) {
 export function AgentVersion({ agent }: { agent: Agent }) {
   const start = useUpdateAgentVersion();
   const cancel = useCancelAgentUpdate();
+  const revert = useRevertAgentVersion();
   const { update } = agent;
-  const error = start.error ?? cancel.error;
+  const error = start.error ?? cancel.error ?? revert.error;
+  const verb = update.revert ? "Reverting" : "Updating";
+  const phase = update.phase ? phases[update.phase] : "";
+  const failure = update.failure ? failures[update.failure] : undefined;
+  // A failed update that left the agent on the new version is not tried again; Revert is the way back.
+  const retry = update.state === "failed" && !update.revert && update.failure !== "lost-executors";
 
   const updateButton = (label: string) => (
     <button type="button" className="button button--small" disabled={start.isPending} onClick={() => start.mutate(agent.id)}>
@@ -43,7 +71,7 @@ export function AgentVersion({ agent }: { agent: Agent }) {
           </span>
         ) : update.state === "queued" ? (
           <>
-            <span className="muted small">Waiting for another update</span>
+            <span className="muted small">{update.revert ? `Revert to ${update.targetVersion} waits for another update` : "Waiting for another update"}</span>
             <button type="button" className="link-button small" disabled={cancel.isPending} onClick={() => cancel.mutate(agent.id)}>
               Cancel
             </button>
@@ -52,7 +80,11 @@ export function AgentVersion({ agent }: { agent: Agent }) {
           <>
             <span className="agent-version__progress small">
               <LoaderCircle className="spin" size={14} aria-hidden="true" />
-              Updating to {update.targetVersion}
+              {verb} to {update.targetVersion}
+              {phase ? <span className="muted"> · {phase}</span> : null}
+              {update.phase === "restarting" && update.deadlineAt ? (
+                <span className="muted"> · fails if not back by {time(update.deadlineAt)}</span>
+              ) : null}
             </span>
             <span className="small agent-version__links">
               <Links update={update} />
@@ -60,9 +92,24 @@ export function AgentVersion({ agent }: { agent: Agent }) {
           </>
         ) : update.state === "failed" ? (
           <>
-            <span className="agent-version__failed small">Update failed</span>
-            {updateButton("Try again")}
+            <span className="agent-version__failed small">
+              {update.revert ? "Revert failed" : "Update failed"}
+              {failure ? `: ${failure}` : null}
+            </span>
+            {retry ? updateButton("Try again") : null}
           </>
+        ) : null}
+        {update.canRevert && update.previousVersion ? (
+          <button
+            type="button"
+            className="link-button small"
+            disabled={revert.isPending}
+            title={`Bring back ${update.previousVersion}, the version it ran before its last update`}
+            onClick={() => revert.mutate(agent.id)}
+          >
+            <Undo2 size={14} aria-hidden="true" />
+            Revert to {update.previousVersion}
+          </button>
         ) : null}
       </span>
       {update.state === "failed" ? (

@@ -97,6 +97,27 @@ public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string
 
     public IReadOnlyList<string> Capabilities { get; } = capabilities ?? [];
 
+    /// <summary>The version the agent reported in its Hello on this connection. Null for one made in this process, as in tests.</summary>
+    public string? Version { get; init; }
+
+    /// <summary>What the agent offered in its Hello on this connection, whatever it offered since: what its process started with.</summary>
+    public IReadOnlyList<string> HelloExecutors { get; } = executors;
+
+    /// <summary>Why each executor was missing in its Hello on this connection.</summary>
+    public IReadOnlyDictionary<string, string> HelloUnavailable { get; } = unavailable ?? new SortedDictionary<string, string>();
+
+    private volatile Running? _running;
+
+    /// <summary>The attempts the agent said last, in its Hello or a heartbeat, it was still executing, and when (server's clock).</summary>
+    public sealed record Running(IReadOnlySet<string> AttemptIds, DateTimeOffset At);
+
+    /// <summary>What the agent said last on this connection about the attempts it executes; null until it said anything.</summary>
+    public Running? LastRunning => _running;
+
+    /// <summary>Keeps what the agent says it executes now. In memory only: a new connection starts with its Hello.</summary>
+    public void ReportRunning(IEnumerable<string> attemptIds, DateTimeOffset at) =>
+        _running = new Running(attemptIds.ToHashSet(StringComparer.OrdinalIgnoreCase), at);
+
     public DateTimeOffset ConnectedAt { get; } = DateTimeOffset.UtcNow;
 
     public string? ToolRuntime { get; } = toolRuntime;

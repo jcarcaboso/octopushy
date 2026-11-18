@@ -526,6 +526,17 @@ public static partial class Endpoints
         })
         .WithName("updateAgentVersion");
 
+        // Back to the version the agent ran before its last update, through the same flow.
+        group.MapPost("/{id:guid}/revert", async Task<Results<NoContent, NotFound, ProblemHttpResult>> (Guid id, HttpContext http, AgentUpdates updates,
+            CancellationToken ct) =>
+        {
+            var outcome = await updates.RevertAsync(id, http.User.Identity?.Name ?? "octopushy", ct);
+            if (!outcome.Found)
+                return TypedResults.NotFound();
+            return outcome.Refused is { } refused ? TypedResults.Problem(title: refused, statusCode: 409) : TypedResults.NoContent();
+        })
+        .WithName("revertAgentVersion");
+
         group.MapPost("/update", async (HttpContext http, AgentUpdates updates, CancellationToken ct) =>
         {
             await updates.RequestAllAsync(http.User.Identity?.Name ?? "octopushy", ct);
@@ -582,7 +593,13 @@ public static partial class Endpoints
                             + "; drain its work and inspect uncertain outcomes before disabling it.", statusCode: 409);
                     agent.Disabled = disabled;
                 }
-                if (update.Draining is { } draining) agent.Draining = draining;
+                if (update.Draining is { } draining && draining != agent.Draining)
+                {
+                    agent.Draining = draining;
+                    // A pause set or lifted by a person is theirs from now on: the end of an update leaves it as they set it.
+                    // Dispatch gives an agent being updated nothing either way (RunEngine.DispatchAsync).
+                    agent.UpdatePaused = false;
+                }
 
                 await db.SaveChangesAsync(ct);
                 if (agent.Disabled)

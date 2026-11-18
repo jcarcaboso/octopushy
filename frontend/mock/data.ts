@@ -538,7 +538,7 @@ export const agents: Agent[] = [
     ],
     work: [{ runId: "running", runNumber: 50, operation: "provision", address: "home/pve01/dns", step: "apply", status: "running", since: ago(3) }],
     guest: { resourceId: "bb", address: "home/pve01/bb", declaredVersion: "0.8.1" },
-    update: { state: "current", targetVersion: null, reason: null, changeId: null, runId: null },
+    update: { state: "current", targetVersion: null, reason: null, changeId: null, runId: null, previousVersion: "0.7.1", canRevert: true, revert: false },
   },
   {
     id: "agent-pve01-02", name: "pve01-agent-02", labels: ["home", "gpu"], maxConcurrency: 1, disabled: false, connected: true, enrolledAt: ago(20000),
@@ -557,17 +557,22 @@ export const agents: Agent[] = [
     ],
     work: [],
     guest: { resourceId: "dev", address: "home/pve01/dev", declaredVersion: "0.7.1" },
-    update: { state: "available", targetVersion: latestAgentVersion, reason: null, changeId: null, runId: null },
+    update: { state: "available", targetVersion: latestAgentVersion, reason: null, changeId: null, runId: null, canRevert: false, revert: false },
   },
   {
     id: "agent-media", name: "media-agent", labels: [], maxConcurrency: 1, disabled: false, connected: true, enrolledAt: ago(150000),
-    lastSeenAt: ago(0.2), version: "0.5.2", executors: ["opentofu", "proxmox"], toolRuntime: "local",
+    lastSeenAt: ago(0.2), version: "0.8.1", executors: ["proxmox"], toolRuntime: "local",
     certificateExpiresAt: ago(-30000), runningAttempts: 0, draining: true, reportsReachability: false, reachability: null,
-    // An older agent: it says nothing about missing tools or disk, and nothing is shown for them.
-    unavailable: {}, storage: null,
+    // Its update came back without OpenTofu: failed, nothing rolled back, and Revert offered.
+    unavailable: { opentofu: "tofu was not found on PATH" }, storage: null,
     work: [],
-    guest: { resourceId: "media", address: "home/pve01/media", declaredVersion: "0.5.2" },
-    update: { state: "available", targetVersion: latestAgentVersion, reason: null, changeId: null, runId: null },
+    guest: { resourceId: "media", address: "home/pve01/media", declaredVersion: "0.8.1" },
+    update: {
+      state: "failed", targetVersion: latestAgentVersion, changeId: null, runId: null, failure: "lost-executors", previousVersion: "0.5.2",
+      canRevert: true, revert: false,
+      reason: "media-agent is back on 0.8.1 and no longer offers opentofu (tofu was not found on PATH), which it did before. "
+        + "Nothing was rolled back. Revert brings back 0.5.2.",
+    },
   },
   {
     id: "agent-laptop", name: "laptop", labels: ["dev"], maxConcurrency: 1, disabled: false, connected: false, enrolledAt: ago(90000),
@@ -582,7 +587,7 @@ export const agents: Agent[] = [
     work: [],
     guest: null,
     update: {
-      state: "unavailable", targetVersion: latestAgentVersion, changeId: null, runId: null,
+      state: "unavailable", targetVersion: latestAgentVersion, changeId: null, runId: null, canRevert: false, revert: false,
       reason: "It does not run on a guest Octopushy manages, so it has to be updated on its own machine.",
     },
   },

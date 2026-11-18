@@ -25,7 +25,7 @@ function agent(more: Partial<Agent> & { id: string; name: string }): Agent {
     executors: ["opentofu", "ansible"], toolRuntime: "podman 5.6.2", runningAttempts: 0, reportsReachability: true,
     enrolledAt: minutesAgo(60_000), lastSeenAt: minutesAgo(0), certificateExpiresAt: new Date(Date.now() + 80.5 * 86_400_000).toISOString(),
     reachability: [], work: [], guest: null,
-    update: { state: "current", targetVersion: null, reason: null, changeId: null, runId: null },
+    update: { state: "current", targetVersion: null, reason: null, changeId: null, runId: null, canRevert: false, revert: false },
     ...more,
   };
 }
@@ -45,12 +45,12 @@ const busy = agent({
 });
 const behind = agent({
   id: "a2", name: "site-b", version: "0.7.1",
-  update: { state: "available", targetVersion: "0.8.1", reason: null, changeId: null, runId: null },
+  update: { state: "available", targetVersion: "0.8.1", reason: null, changeId: null, runId: null, canRevert: false, revert: false },
 });
 const away = agent({
   id: "a3", name: "laptop", connected: false, lastSeenAt: minutesAgo(4300), version: "0.6.4", reportsReachability: false,
   certificateExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-  update: { state: "unavailable", targetVersion: "0.8.1", reason: "It was installed by hand, so update it on its machine.", changeId: null, runId: null },
+  update: { state: "unavailable", targetVersion: "0.8.1", reason: "It was installed by hand, so update it on its machine.", changeId: null, runId: null, canRevert: false, revert: false },
 });
 
 function serve(agents: Agent[], tokens: EnrollmentToken[] = [], more: Parameters<typeof mockApi>[0] = {}) {
@@ -259,14 +259,14 @@ it("updates an agent, says it finishes its runs first, and shows a refusal next 
 
 it("shows an update waiting, going and failed, and takes a waiting one out of the queue", async () => {
   const user = userEvent.setup();
-  const queued = agent({ id: "q", name: "queued", version: "0.7.1", update: { state: "queued", targetVersion: "0.8.1", reason: null, changeId: null, runId: null } });
+  const queued = agent({ id: "q", name: "queued", version: "0.7.1", update: { state: "queued", targetVersion: "0.8.1", reason: null, changeId: null, runId: null, canRevert: false, revert: false } });
   const going = agent({
     id: "u", name: "going", version: "0.7.1", draining: true,
-    update: { state: "updating", targetVersion: "0.8.1", reason: null, changeId: "c1", runId: "r1" },
+    update: { state: "updating", targetVersion: "0.8.1", reason: null, changeId: "c1", runId: "r1", canRevert: false, revert: false },
   });
   const failed = agent({
     id: "f", name: "broken", version: "0.7.1",
-    update: { state: "failed", targetVersion: "0.8.1", reason: "The guest did not come back.", changeId: null, runId: "r2" },
+    update: { state: "failed", targetVersion: "0.8.1", reason: "The guest did not come back.", changeId: null, runId: "r2", canRevert: false, revert: false },
   });
   const { requests } = serve([queued, going, failed], [], {
     "DELETE /api/agents/q/update": () => undefined,
@@ -291,6 +291,63 @@ it("shows an update waiting, going and failed, and takes a waiting one out of th
   expect(within(f).getByRole("link", { name: "View run" })).toHaveAttribute("href", "/runs/r2");
   await user.click(within(f).getByRole("button", { name: "Try again" }));
   await waitFor(() => expect(requests.some((r) => r.method === "POST" && r.path === "/api/agents/f/update")).toBe(true));
+});
+
+it("says what an update waits for, offers Revert to the version from before, and shows why one failed", async () => {
+  const user = userEvent.setup();
+  const waiting = agent({
+    id: "w", name: "waiting", version: "0.7.1", draining: true,
+    update: {
+      state: "updating", targetVersion: "0.8.1", reason: null, changeId: "c1", runId: "r1", phase: "waiting-for-idle",
+      previousVersion: "0.7.1", canRevert: false, revert: false,
+    },
+  });
+  const restarting = agent({
+    id: "r", name: "restarting", version: "0.7.1", draining: true,
+    update: {
+      state: "updating", targetVersion: "0.7.0", reason: null, changeId: "c2", runId: "r2", phase: "restarting",
+      deadlineAt: new Date(Date.now() + 1_800_000).toISOString(), previousVersion: "0.7.0", canRevert: false, revert: true,
+    },
+  });
+  const updated = agent({
+    id: "u", name: "updated",
+    update: { state: "current", targetVersion: null, reason: null, changeId: null, runId: null, previousVersion: "0.7.1", canRevert: true, revert: false },
+  });
+  const lost = agent({
+    id: "l", name: "lost",
+    update: {
+      state: "failed", targetVersion: "0.8.1", reason: "lost is back on 0.8.1 and no longer offers opentofu (tofu is missing), which it did before.",
+      changeId: null, runId: "r3", failure: "lost-executors", previousVersion: "0.7.1", canRevert: true, revert: false,
+    },
+  });
+  const unconfirmed = agent({
+    id: "x", name: "unconfirmed", version: "0.7.1", draining: true,
+    update: {
+      state: "updating", targetVersion: "0.8.1", reason: null, changeId: "c4", runId: "r4", phase: "waiting-for-unconfirmed-change",
+      waitingForAttemptId: "a9", waitingForRunId: "r9", previousVersion: "0.7.1", canRevert: false, revert: false,
+    },
+  });
+  const { requests } = serve([waiting, restarting, updated, lost, unconfirmed], [], { "POST /api/agents/u/revert": () => undefined });
+
+  const w = await row("waiting");
+  expect(w).toHaveTextContent("Updating to 0.8.1 · waiting for its work to finish");
+  expect(within(w).queryByRole("button", { name: /Revert/ })).toBeNull();
+  const x = await row("unconfirmed");
+  expect(x).toHaveTextContent("waiting for it to say a change whose lease ran out has stopped");
+  expect(within(x).getByRole("link", { name: "View the run it waits for" })).toHaveAttribute("href", "/runs/r9");
+  const r = await row("restarting");
+  expect(r).toHaveTextContent("Reverting to 0.7.0 · restarting · fails if not back by");
+
+  const u = await row("updated");
+  expect(u).toHaveTextContent("Latest");
+  await user.click(within(u).getByRole("button", { name: "Revert to 0.7.1" }));
+  await waitFor(() => expect(requests.some((x) => x.method === "POST" && x.path === "/api/agents/u/revert")).toBe(true));
+
+  const l = await row("lost");
+  expect(l).toHaveTextContent("Update failed: lost tools");
+  expect(l).toHaveTextContent("no longer offers opentofu (tofu is missing)");
+  expect(within(l).queryByRole("button", { name: "Try again" })).toBeNull();
+  expect(within(l).getByRole("button", { name: "Revert to 0.7.1" })).toBeVisible();
 });
 
 it("makes a token at once, copies it, and makes another in its place", async () => {

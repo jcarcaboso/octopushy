@@ -50,6 +50,58 @@ public sealed partial class RunEngine
                 || (a.Status == AttemptStatuses.Cancelled && a.ResultSha256 == null)), ct);
     }
 
+    /// <summary>
+    /// Holds <paramref name="attempt"/>, a change to the guest of agent <paramref name="agentId"/> while that agent is being
+    /// updated, until restarting the agent can interrupt nothing: no attempt is assigned to it or running on it, and no change
+    /// of it whose lease ran out may still execute (<see cref="UnconfirmedAsync"/>). Under the engine's gate, and dispatch
+    /// assigns nothing to an agent being updated, so nothing lands on it between this check and the hand-off. Returns the
+    /// agent, tracked, when the change may go; null when it waits. Writes only what changes, so a tick that waits saves nothing.
+    /// </summary>
+    private async Task<AgentRecord?> UpdateHoldAsync(OctopushyDb db, Guid agentId, Attempt attempt, CancellationToken ct)
+    {
+        var agent = await db.Agents.SingleAsync(a => a.Id == agentId, ct);
+        var busy = await db.Attempts.Include(a => a.Step).ThenInclude(s => s!.Run)
+            .Where(a => a.AgentId == agentId && a.Id != attempt.Id && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running))
+            .OrderBy(a => a.AssignedAt).FirstOrDefaultAsync(ct);
+        var unconfirmed = busy is null ? await UnconfirmedAsync(db, agentId, ct) : null;
+        var waited = busy ?? unconfirmed;
+        agent.UpdateHold = busy is not null ? AgentUpdateHolds.Busy : unconfirmed is not null ? AgentUpdateHolds.UnconfirmedChange : null;
+        agent.UpdateHoldAttemptId = waited?.Id;
+        if (waited is null)
+            return agent;
+        var what = waited.Step?.Run is { } run ? $"{waited.Action} of run #{run.Number}" : $"attempt {waited.Id}";
+        attempt.WaitingReason = busy is not null
+            ? $"Waiting for agent {agent.Name}, which this guest runs, to finish {what}: its update restarts it, and nothing it runs is interrupted."
+            : $"Waiting for agent {agent.Name}, which this guest runs, to say that {what} no longer runs: its lease ran out, and the update "
+              + "would restart the agent under it. It ends when the agent connects or reports, or cancel this run to give the update up.";
+        return null;
+    }
+
+    /// <summary>
+    /// A change of <paramref name="agentId"/> that may still execute though it is no longer assigned or running: uncertain, its
+    /// lease run out or force stopped, with no result taken for it, and not ruled out by the agent. The agent rules it out with a
+    /// Hello or heartbeat on its current connection, said after the attempt became uncertain, that does not list it: those list
+    /// every attempt it still executes. A result it has not sent yet survives a restart in its outbox, so only execution counts.
+    /// </summary>
+    private async Task<Attempt?> UnconfirmedAsync(OctopushyDb db, Guid agentId, CancellationToken ct)
+    {
+        var uncertain = await db.Attempts.Include(a => a.Step).ThenInclude(s => s!.Run)
+            .Where(a => a.AgentId == agentId && a.Mutating && a.Status == AttemptStatuses.Uncertain
+                        && !a.LateResult && !a.OutputsWithheld && a.ResultSha256 == null)
+            .OrderBy(a => a.FinishedAt).ToListAsync(ct);
+        return uncertain.FirstOrDefault(MayStillExecute);
+    }
+
+    /// <summary>
+    /// Whether an uncertain change with no result taken may still execute on its agent: true until a Hello or heartbeat on the
+    /// agent's current connection, said after it became uncertain, does not list it. Those list every attempt it still executes.
+    /// </summary>
+    internal bool MayStillExecute(Attempt attempt)
+    {
+        var said = attempt.AgentId is { } agentId ? connections.Get(agentId)?.LastRunning : null;
+        return said is null || attempt.FinishedAt is not { } stopped || said.At <= stopped || said.AttemptIds.Contains(attempt.Id.ToString());
+    }
+
     /// <summary>Assigns queued attempts to connected agents that are allowed and have room.</summary>
     public async Task DispatchAsync(CancellationToken cancellationToken)
     {
@@ -87,8 +139,16 @@ public sealed partial class RunEngine
             var perAgent = active.Where(a => a.AgentId is not null).GroupBy(a => a.AgentId!.Value).ToDictionary(g => g.Key, g => g.Count());
             var perHost = active.Where(a => a.HostKey is not null).GroupBy(a => a.HostKey!).ToDictionary(g => g.Key, g => g.Count());
             var connectedIds = connections.All.Select(s => s.AgentId).ToList();
+            // An agent being updated takes nothing, whatever its pause says: a person may lift that during the update, and work
+            // handed to it after the hold let its restart go would be interrupted.
             var agents = await snapshot.Agents.AsNoTracking()
-                .Where(a => !a.Disabled && !a.Draining && connectedIds.Contains(a.Id))
+                .Where(a => !a.Disabled && !a.Draining && a.UpdateState != AgentUpdateStates.Updating && connectedIds.Contains(a.Id))
+                .ToListAsync(cancellationToken);
+            // The guests of agents being updated, recorded when the update is claimed, before its change is committed: a change
+            // to one may restart its agent. See UpdateHoldAsync.
+            var updatingGuests = await snapshot.Agents.AsNoTracking()
+                .Where(a => a.UpdateState == AgentUpdateStates.Updating && a.UpdateResourceId != null)
+                .Select(a => new { AgentId = a.Id, ResourceId = a.UpdateResourceId })
                 .ToListAsync(cancellationToken);
             // Guests already handed work during this pass.
             var changing = new HashSet<Guid>();
@@ -167,6 +227,14 @@ public sealed partial class RunEngine
                             else
                                 attempt.WaitingReason = held;
                             return;
+                        }
+
+                        AgentRecord? restarting = null;
+                        if (run is not null && attempt.Mutating && updatingGuests.FirstOrDefault(u => u.ResourceId == run.ResourceId) is { } updating)
+                        {
+                            restarting = await UpdateHoldAsync(db, updating.AgentId, attempt, cancellationToken);
+                            if (restarting is null)
+                                return;
                         }
 
                         var resourceId = run?.ResourceId ?? attempt.ResourceId;
@@ -283,6 +351,9 @@ public sealed partial class RunEngine
                             step.StartedAt ??= now;
                         }
 
+                        // The agent's deadline to come back counts from the last step that may restart it.
+                        if (restarting is not null)
+                            restarting.UpdateReleasedAt = now;
                         changing.UnionWith(family);
                         perAgent[agent.Id] = perAgent.GetValueOrDefault(agent.Id) + 1;
                         if (attempt.HostKey is { } key)

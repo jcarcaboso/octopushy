@@ -72,14 +72,14 @@ function agent(more: Partial<Agent> & { id: string; name: string }): Agent {
     labels: [], maxConcurrency: 2, disabled: false, draining: false, connected: true, version: "0.8.1", executors: [], toolRuntime: null,
     runningAttempts: 0, reportsReachability: false, enrolledAt: minutesAgo(60_000), lastSeenAt: minutesAgo(0),
     certificateExpiresAt: minutesAgo(-100_000), reachability: [], work: [], guest: null,
-    update: { state: "current", targetVersion: null, reason: null, changeId: null, runId: null },
+    update: { state: "current", targetVersion: null, reason: null, changeId: null, runId: null, canRevert: false, revert: false },
     ...more,
   };
 }
 
 const agents = [
   agent({ id: "a1", name: "site-a" }),
-  agent({ id: "a2", name: "site-b", update: { state: "available", targetVersion: "0.9.0", reason: null, changeId: null, runId: null } }),
+  agent({ id: "a2", name: "site-b", update: { state: "available", targetVersion: "0.9.0", reason: null, changeId: null, runId: null, canRevert: false, revert: false } }),
   agent({ id: "a3", name: "laptop", connected: false, lastSeenAt: minutesAgo(4300) }),
   agent({ id: "a4", name: "old-box", connected: false, disabled: true }),
 ];

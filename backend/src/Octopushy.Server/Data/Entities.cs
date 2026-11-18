@@ -1213,14 +1213,51 @@ public sealed class AgentRecord
     /// <summary>The change that carries the update, once it is committed.</summary>
     public Guid? UpdateChangeId { get; set; }
 
-    /// <summary>When the change was applied: the agent has <see cref="Agents.AgentUpdates.ComeBackWithin"/> from then to report the target.</summary>
-    public DateTimeOffset? UpdateAppliedAt { get; set; }
-
     /// <summary>Why the update failed, for people.</summary>
     public string? UpdateDetail { get; set; }
 
     /// <summary>Whether the update paused the agent, so it lifts that pause and never one a person set.</summary>
     public bool UpdatePaused { get; set; }
+
+    /// <summary>
+    /// The version the agent reported in its Hello when its latest update started, kept once the update ends: what Revert
+    /// brings back. Null when no update has started.
+    /// </summary>
+    public string? UpdatePreviousVersion { get; set; }
+
+    /// <summary>The executors the agent offered when its update started, sorted: the new version must offer each of them.</summary>
+    public string[]? UpdatePreviousExecutors { get; set; }
+
+    /// <summary>Whether the update asked for brings back <see cref="UpdatePreviousVersion"/> instead of the server's version.</summary>
+    public bool UpdateRevert { get; set; }
+
+    /// <summary>
+    /// The guest the update changes, recorded under the engine's lock when the update is claimed, before its change is
+    /// committed: from then on dispatch holds every change to it until the agent is idle. Cleared with the update.
+    /// </summary>
+    public Guid? UpdateResourceId { get; set; }
+
+    /// <summary>
+    /// <see cref="AgentUpdateHolds"/>: why dispatch holds a change to the guest that may restart the agent, or null. Written by
+    /// dispatch, only when it changes.
+    /// </summary>
+    public string? UpdateHold { get; set; }
+
+    /// <summary>The attempt on the agent that <see cref="UpdateHold"/> waits for.</summary>
+    public Guid? UpdateHoldAttemptId { get; set; }
+
+    /// <summary>When the last step of the update's run that may restart the agent was handed out: the deadline counts from here.</summary>
+    public DateTimeOffset? UpdateReleasedAt { get; set; }
+
+    /// <summary>
+    /// The agent's connection when its update was claimed, if it had one (<see cref="Agents.AgentSession.Id"/>): another
+    /// connection since is a new process, whose Hello must offer every executor the agent offered then. Recorded once, so later
+    /// steps handed out for the guest never move it.
+    /// </summary>
+    public Guid? UpdateBaselineConnection { get; set; }
+
+    /// <summary><see cref="AgentUpdateFailures"/>: why the update failed, when it did. <see cref="UpdateDetail"/> says it for people.</summary>
+    public string? UpdateFailure { get; set; }
 
     /// <summary>
     /// When it was told offline (<see cref="NotificationKinds.AgentOffline"/>); null once told online again, or never told.
@@ -1235,6 +1272,69 @@ public static class AgentUpdateStates
     public const string Queued = "queued";
     public const string Updating = "updating";
     public const string Failed = "failed";
+}
+
+/// <summary>Where an update in flight stands, shown with <see cref="AgentUpdateStates.Updating"/>. Derived, never stored.</summary>
+public static class AgentUpdatePhases
+{
+    /// <summary>Its change is being committed, or its run works on the steps before the one that restarts the agent.</summary>
+    public const string RollingOut = "rolling-out";
+    /// <summary>A run of its change waits for a person's approval. No deadline runs.</summary>
+    public const string AwaitingApproval = "awaiting-approval";
+    /// <summary>A run of its change is blocked, by trust or a credential. No deadline runs.</summary>
+    public const string Blocked = "blocked";
+    /// <summary>The step that restarts the agent waits for the agent's other work to finish. No deadline runs.</summary>
+    public const string WaitingForIdle = "waiting-for-idle";
+    /// <summary>
+    /// The step that restarts the agent waits for the agent to confirm that a change whose lease ran out no longer executes
+    /// (<see cref="AgentUpdateHolds.UnconfirmedChange"/>). No deadline runs.
+    /// </summary>
+    public const string WaitingForUnconfirmedChange = "waiting-for-unconfirmed-change";
+    /// <summary>The step that restarts the agent was handed out: the agent has until the deadline to come back on the target.</summary>
+    public const string Restarting = "restarting";
+}
+
+/// <summary>Why dispatch holds a change to the guest of an agent being updated. See <see cref="AgentRecord.UpdateHold"/>.</summary>
+public static class AgentUpdateHolds
+{
+    /// <summary>An attempt is assigned to the agent or running on it.</summary>
+    public const string Busy = "busy";
+
+    /// <summary>
+    /// A change on the agent whose lease ran out, or that a person force stopped, and that the agent has not said it stopped:
+    /// it may still execute, and one late result may still settle it. A Hello or heartbeat from the agent that does not list
+    /// it, or its result, ends the wait; cancelling the update's run gives the update up.
+    /// </summary>
+    public const string UnconfirmedChange = "unconfirmed-change";
+}
+
+/// <summary>Why an agent's update failed. Stored on the agent and shown as is; its sentence is in <c>UpdateDetail</c>.</summary>
+public static class AgentUpdateFailures
+{
+    /// <summary>The server stopped between claiming the update and recording its change.</summary>
+    public const string ChangeNotRecorded = "change-not-recorded";
+    /// <summary>When its turn came, the agent could no longer be updated from here.</summary>
+    public const string Unavailable = "unavailable";
+    /// <summary>Its change was not committed.</summary>
+    public const string CommitRefused = "commit-refused";
+    /// <summary>Its change is gone.</summary>
+    public const string ChangeGone = "change-gone";
+    /// <summary>A run of its change ended uncertain.</summary>
+    public const string RunUncertain = "run-uncertain";
+    /// <summary>Its change failed: a run failed or was cancelled.</summary>
+    public const string ChangeFailed = "change-failed";
+    /// <summary>Its change was refused or dismissed.</summary>
+    public const string ChangeRefused = "change-refused";
+    /// <summary>Another commit changed the guest first.</summary>
+    public const string Superseded = "superseded";
+    /// <summary>Its change proposed no run.</summary>
+    public const string NoRun = "no-run";
+    /// <summary>The agent did not connect again before the deadline.</summary>
+    public const string DidNotComeBack = "did-not-come-back";
+    /// <summary>The agent connected again before the deadline, on another version than the target.</summary>
+    public const string OtherVersion = "other-version";
+    /// <summary>The agent came back on the target and offers fewer executors than before. Nothing is rolled back.</summary>
+    public const string LostExecutors = "lost-executors";
 }
 
 public sealed class EnrollmentToken

@@ -178,22 +178,52 @@ version on the guest.
 
 **What an update does,** one agent at a time:
 
-1. The agent is paused, so it takes no new work and finishes what it runs. A pause set by hand before stays.
+1. The version the agent reported in its Hello, and the executors it offers, are recorded. The agent is paused, so it
+   takes no new work and finishes what it runs. A pause set by hand before stays.
 2. A change to the guest's definition is committed as the operator who asked: `worker_agent_version` becomes the
    server's version and `worker_agent_digest` is removed. The other inputs and the file's comments are kept.
 3. The change is approved in the same click, whatever `policy.approval` says: its setup run, and its provision plan
    when that changes no resource. A setup the workflow declares destructive is never approved this way:
    it follows the guest's policy, and waits for a person where that says so.
 4. The guest's setup run rolls the new image out. Another agent runs it, since an agent never configures its own guest.
-5. The update ends when the agent connects reporting the server's version. Its pause is lifted then, unless a person
-   had set it.
+   **A step that changes the guest waits until the agent is idle:** from the moment the update is claimed, before its
+   commit, dispatch holds every change to the guest until no attempt is assigned to the agent or running on it, and no
+   change of it whose lease ran out (or that was force stopped) may still execute. Such a change counts until the agent's
+   result for it arrives, or a Hello or heartbeat from the agent, sent after its lease ran out, no longer lists it. Agents
+   shows which attempt the update waits for, and its run. A person can bring the agent back, or cancel the update's run to
+   give the update up. A change running on the agent is never interrupted; the update waits for it, however long.
+   An agent being updated is given no work at all, whatever its pause says.
+5. The update ends when its change has applied, no change to the guest is queued, assigned or running, and the agent's
+   connection reports the server's version. A new process must offer at least the executors the agent offered before.
+   Gaining executors is fine. Its pause is lifted then, unless a person set or lifted it, before or during the update.
+
+While it is in flight, **Agents** says where it stands: rolling out, waiting for the run's approval, blocked, waiting for
+the agent's work to finish, or restarting, with the time it fails if the agent is not back.
 
 An update asked for while another is in flight is queued and starts, in the order asked, when that one ends.
-**Update all** asks for every agent that can be updated, in name order. A queued update can be taken back.
+**Update all** asks for every agent that can be updated, in name order, and never a Revert. A queued update can be taken
+back.
 
-**An update fails** when its change is refused, its run fails or ends uncertain, or the agent is not back on the
-server's version 15 minutes after the change is applied. The pause is lifted, and every queued update is dropped, so
-one bad release cannot take every agent down in turn. The agent shows why, and asking again retries.
+**An update fails**, with a reason the page shows, when:
+
+- its change is refused, superseded or proposes no run, or its run fails, is cancelled, or ends uncertain;
+- the agent is not back on the version `Octopushy__AgentUpdates__ComeBackMinutes` (default 30) after the last step that
+  may restart it was handed out, and its runs have ended. Time a run of the update waits for approval or is blocked does
+  not count, so an update waiting for a person waits as long as it takes;
+- the agent connects again after that step on another version, once the change is applied;
+- the agent is back on the new version and no longer offers an executor it offered before. The page names each one, with
+  the agent's reason. Nothing is rolled back.
+
+A failure lifts the pause and drops every queued update, so one bad release cannot take every agent down in turn; a
+queued Revert stays. The failure is told once (`agent-update-failed`). An agent its update is restarting is not told
+offline while the update waits for it. Asking again retries, except after a lost executor: the agent runs the new
+version, and Revert is the way back.
+
+**Revert** brings back the version the agent reported before its last update. It is offered when that version is
+recorded, is older than the server's, and the agent or its guest is not on it already, and only when no update is in
+flight. It is an update like any other: a new commit that sets `worker_agent_version` to that version and removes
+`worker_agent_digest` (the history keeps the update's commit), approved the same way, held until the agent is idle, and
+checked for lost executors. It ends when the agent reports exactly that version. It is never started on its own.
 
 **When the button is not offered,** the agent says why:
 

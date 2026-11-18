@@ -69,6 +69,19 @@ public sealed class OctopushyOptions
     public string? PublicUrl { get; set; }
 
     public NotificationOptions Notifications { get; set; } = new();
+
+    public AgentUpdateOptions AgentUpdates { get; set; } = new();
+}
+
+/// <summary>Agent updates from the Agents page. See docs/worker-routing.md.</summary>
+public sealed class AgentUpdateOptions
+{
+    /// <summary>
+    /// How long, in minutes, an agent has to connect again on the version its update sets, counted from when the last step
+    /// that may restart it was handed out. Its setup pulls an image and restarts a container, which takes minutes. The time a
+    /// run of the update waits for approval or is blocked does not count.
+    /// </summary>
+    public int ComeBackMinutes { get; set; } = 30;
 }
 
 /// <summary>Notifications sent out of the app. See docs/notifications.md.</summary>

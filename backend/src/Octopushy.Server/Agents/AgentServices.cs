@@ -125,7 +125,9 @@ public sealed class AgentChannelService(
         var session = new AgentSession(agent.Id, agent.Name, executors, hello.Capabilities.ToList(), hello.ToolRuntime, unavailable)
         {
             RemoteAddress = context.GetHttpContext().Connection.RemoteIpAddress,
+            Version = hello.AgentVersion,
         };
+        session.ReportRunning(hello.RunningAttemptIds, clock.GetUtcNow());
         var writer = Task.CompletedTask;
         var handler = Task.CompletedTask;
         try
@@ -267,6 +269,7 @@ public sealed class AgentChannelService(
                         // agent and wake the engine each time (see SavedWrites).
                         if (heartbeat.Storage is { } storage)
                             session.Storage = AgentAvailability.Storage(storage, clock.GetUtcNow());
+                        session.ReportRunning(heartbeat.RunningAttemptIds, clock.GetUtcNow());
                         await engine.OnHeartbeatAsync(agent.Id, heartbeat.RunningAttemptIds, call.Token);
                         // An offer a burst of changes left unsaved is stored behind them, under the gate, never here.
                         if (session.TryQueueOfferFlush(clock.GetUtcNow()))
