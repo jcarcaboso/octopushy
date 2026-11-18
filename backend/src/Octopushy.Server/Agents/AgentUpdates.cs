@@ -512,7 +512,10 @@ public sealed class AgentUpdates(
             return true;
         var uncertain = await db.Attempts.AsNoTracking()
             .Where(a => a.Mutating && a.Step!.Run!.ResourceId == guest && a.Status == AttemptStatuses.Uncertain
-                        && a.Step.Run.Status == RunStatuses.Uncertain && !a.LateResult && !a.OutputsWithheld && a.ResultSha256 == null)
+                        // Its run has not ended: uncertain, or not yet advanced since the lease ran out. A person closing it ends it.
+                        && a.Step.Run.Status != RunStatuses.Succeeded && a.Step.Run.Status != RunStatuses.Failed
+                        && a.Step.Run.Status != RunStatuses.Cancelled
+                        && !a.LateResult && !a.OutputsWithheld && a.ResultSha256 == null)
             .ToListAsync(ct);
         return uncertain.Any(engine.MayStillExecute);
     }

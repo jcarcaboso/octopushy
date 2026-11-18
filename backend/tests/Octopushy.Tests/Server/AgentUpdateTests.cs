@@ -732,9 +732,11 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_stored_refusal_waits_for_a_change_to_its_guest_whose_lease_ran_out_until_its_runner_says_it_stopped_or_its_run_is_closed(bool close)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task A_stored_refusal_waits_for_a_change_to_its_guest_whose_lease_ran_out_until_its_runner_says_it_stopped_or_its_run_is_closed(
+        bool close, bool beforeItsRunMoves)
     {
         await using var setup = await StartAsync(Lab());
         var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
@@ -765,9 +767,28 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
         await request;
         // The setup's lease runs out: uncertain, and it may still execute on the runner.
         var attemptId = Guid.Parse(second.AttemptId);
-        await setup.Server.WithDbAsync(db => db.Attempts.Where(a => a.Id == attemptId)
-            .ExecuteUpdateAsync(u => u.SetProperty(a => a.LeaseExpiresAt, DateTimeOffset.UtcNow.AddSeconds(-1))));
-        await setup.Server.TickAsync();
+        if (beforeItsRunMoves)
+        {
+            // As a tick's expiry leaves it before the run is advanced, under a lock taken again later: the attempt and its step
+            // uncertain, the run still running.
+            var now = DateTimeOffset.UtcNow;
+            await setup.Server.WithDbAsync(async db =>
+            {
+                var attempt = await db.Attempts.Include(a => a.Step).SingleAsync(a => a.Id == attemptId);
+                attempt.Status = AttemptStatuses.Uncertain;
+                attempt.FinishedAt = now;
+                attempt.LeaseExpiresAt = null;
+                attempt.Step!.Status = StepStatuses.Uncertain;
+                await db.SaveChangesAsync();
+            });
+            Assert.Equal(RunStatuses.Running, await setup.Server.QueryAsync(db => db.Attempts.Where(a => a.Id == attemptId).Select(a => a.Step!.Run!.Status).SingleAsync()));
+        }
+        else
+        {
+            await setup.Server.WithDbAsync(db => db.Attempts.Where(a => a.Id == attemptId)
+                .ExecuteUpdateAsync(u => u.SetProperty(a => a.LeaseExpiresAt, DateTimeOffset.UtcNow.AddSeconds(-1))));
+            await setup.Server.TickAsync();
+        }
         Assert.Equal(AttemptStatuses.Uncertain, await setup.Server.QueryAsync(db => db.Attempts.Where(a => a.Id == attemptId).Select(a => a.Status).SingleAsync()));
         await setup.Updates.AdvanceAsync(CancellationToken.None);
         Assert.Equal("updating", await setup.StateAsync(worker.Id));
