@@ -373,10 +373,14 @@ impl ToolRuntime {
             bail!("nix runs only with the local tool runtime");
         }
         let user = match &self.users {
-            // Never root: the Nix store, and the program in it, are its owner's to change.
-            Some(pool) => Some(pool.nix_user().context(
-                "the Nix store is root's; builds run as its owner, which must be an unprivileged user",
-            )?),
+            // Never root: the Nix store, and the program in it, are its owner's to change. Nor a
+            // user whose last cleanup failed: nothing runs as it until one succeeds.
+            Some(pool) => {
+                pool.nix_ready().await?;
+                Some(pool.nix_user().context(
+                    "the Nix store is root's; builds run as its owner, which must be an unprivileged user",
+                )?)
+            }
             None => None,
         };
         version_line(&self.nix_binary, &["--version"], user).await

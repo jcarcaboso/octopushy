@@ -17,8 +17,9 @@
 //!
 //! When the attempt ends, [`Lease::release`] kills every process of the user, takes the
 //! workspace back (`root 0700`), and removes whatever the user owns in the shared writable
-//! directories and the System V IPC objects it created. Only then does the user go back to the
-//! pool. A user whose processes cannot be killed never does.
+//! directories and the System V IPC objects it created. Only when all of that is done and
+//! verified does the user go back to the pool; otherwise it is quarantined, and nothing runs as
+//! it until a later cleanup of it succeeds. The Nix store's owner is held the same way.
 //!
 //! Nix keeps a single-user store owned by one user, which every build writes to. Builds run as
 //! that user, the store's owner, one at a time: they are kept from the agent and from other
@@ -33,6 +34,7 @@ use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -53,6 +55,8 @@ pub const SHARED_WRITABLE: &[&str] = &["/tmp", "/var/tmp", "/dev/shm", "/dev/mqu
 const KILL_TIMEOUT: Duration = Duration::from_secs(30);
 /// The most entries a sweep of the shared directories looks at.
 const SWEEP_LIMIT: usize = 200_000;
+/// How long a lease waiting for a user waits before it tries a quarantined one again.
+const RETRY_QUARANTINED: Duration = Duration::from_secs(30);
 
 /// An unprivileged user tools run as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,8 +149,12 @@ pub fn is_root() -> bool {
 enum Slot {
     Free,
     Leased,
-    /// Its processes could not all be killed: never leased again.
-    Lost,
+    /// Its last cleanup did not finish, or could not be verified: a process may still run as it,
+    /// or a file of it be left where the next attempt could read it. It is never leased until a
+    /// later cleanup of it succeeds.
+    Quarantined,
+    /// A lease is cleaning it up again.
+    Retrying,
 }
 
 /// The pool of tool users, the Nix store's owner, and the user probes run as.
@@ -159,6 +167,8 @@ pub struct UserPool {
     nix: Option<ToolUser>,
     /// One Nix build at a time: they share the store's owner.
     nix_turn: Arc<Semaphore>,
+    /// Whether the Nix user's last cleanup succeeded. While it has not, no build runs as it.
+    nix_clean: Mutex<bool>,
     /// Who version probes run as: nobody.
     probe: ToolUser,
     /// The directories everyone can write to.
@@ -166,6 +176,13 @@ pub struct UserPool {
     /// The agent's own directories, which a sweep leaves alone even inside a shared one: the
     /// state and work directories, whose workspaces are taken back instead, and the Nix store.
     kept: Mutex<Vec<PathBuf>>,
+    /// Workspaces of a user that could not be taken back, tried again with its next cleanup.
+    unreclaimed: Mutex<Vec<(u32, PathBuf)>>,
+    /// The most entries one sweep looks at.
+    sweep_limit: AtomicUsize,
+    /// Users whose cleanup fails whatever happens, for tests.
+    #[cfg(test)]
+    fail_cleanup: Mutex<Vec<u32>>,
 }
 
 impl UserPool {
@@ -246,9 +263,14 @@ impl UserPool {
             freed: Notify::new(),
             nix,
             nix_turn: Arc::new(Semaphore::new(1)),
+            nix_clean: Mutex::new(true),
             probe,
             shared,
             kept: Mutex::new(Vec::new()),
+            unreclaimed: Mutex::new(Vec::new()),
+            sweep_limit: AtomicUsize::new(SWEEP_LIMIT),
+            #[cfg(test)]
+            fail_cleanup: Mutex::new(Vec::new()),
         })
     }
 
@@ -257,9 +279,52 @@ impl UserPool {
         self.kept.lock().unwrap().extend(dirs);
     }
 
-    fn sweep(&self, uid: u32) {
+    /// The most entries one sweep looks at before it gives up, and its user is quarantined.
+    pub fn set_sweep_limit(&self, limit: usize) {
+        self.sweep_limit.store(limit, Ordering::Relaxed);
+    }
+
+    /// Ends whatever `user` left: kills its processes, takes its workspaces back, removes what it
+    /// owns in the shared directories and its IPC objects. `Ok` only when each step is done and
+    /// verified; otherwise why not, and nothing may run as the user again until a later cleanup
+    /// succeeds.
+    fn cleanup(&self, user: ToolUser, workspace: Option<&Path>) -> Result<(), String> {
+        let mut problems = Vec::new();
+        // First: a process still running could leave more behind.
+        if !kill_all(user, KILL_TIMEOUT) {
+            problems.push("its processes survive SIGKILL, or /proc cannot tell".to_owned());
+        }
+        let mut workspaces: Vec<PathBuf> = {
+            let mut unreclaimed = self.unreclaimed.lock().unwrap();
+            let (mine, others): (Vec<_>, Vec<_>) =
+                unreclaimed.drain(..).partition(|(uid, _)| *uid == user.uid);
+            *unreclaimed = others;
+            mine.into_iter().map(|(_, ws)| ws).collect()
+        };
+        workspaces.extend(workspace.map(Path::to_path_buf));
+        for ws in workspaces {
+            if let Err(e) = reclaim(&ws) {
+                problems.push(format!("cannot take back {}: {e:#}", ws.display()));
+                self.unreclaimed.lock().unwrap().push((user.uid, ws));
+            }
+        }
         let kept = self.kept.lock().unwrap().clone();
-        sweep(&self.shared, &kept, uid);
+        let limit = self.sweep_limit.load(Ordering::Relaxed);
+        if let Err(e) = sweep(&self.shared, &kept, user.uid, limit) {
+            problems.push(e);
+        }
+        if let Err(e) = remove_ipc(user) {
+            problems.push(e);
+        }
+        #[cfg(test)]
+        if self.fail_cleanup.lock().unwrap().contains(&user.uid) {
+            problems.push("a cleanup failure the test asked for".to_owned());
+        }
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(problems.join("; "))
+        }
     }
 
     /// How many attempts can run tools at once.
@@ -280,8 +345,57 @@ impl UserPool {
         self.users.iter().copied().chain(self.nix)
     }
 
+    /// The users nothing runs as because their last cleanup failed, Nix's included.
+    pub fn quarantined(&self) -> Vec<u32> {
+        let slots = self.slots.lock().unwrap();
+        let mut out: Vec<u32> = self
+            .users
+            .iter()
+            .zip(slots.iter())
+            .filter(|(_, s)| matches!(s, Slot::Quarantined | Slot::Retrying))
+            .map(|(u, _)| u.uid)
+            .collect();
+        if let Some(nix) = self.nix
+            && !*self.nix_clean.lock().unwrap()
+        {
+            out.push(nix.uid);
+        }
+        out
+    }
+
+    /// Whether Nix builds can run: its user is clean, or is cleaned now. Waits for no build: one
+    /// that runs had a clean user when it started.
+    pub async fn nix_ready(self: &Arc<Self>) -> Result<()> {
+        let Some(user) = self.nix else {
+            bail!("the Nix store is root's, so no build can run as an unprivileged user");
+        };
+        if *self.nix_clean.lock().unwrap() {
+            return Ok(());
+        }
+        let Ok(_turn) = self.nix_turn.clone().try_acquire_owned() else {
+            return Ok(());
+        };
+        self.clean_nix(user).await
+    }
+
+    /// Cleans the Nix user up again; the caller holds its turn.
+    async fn clean_nix(self: &Arc<Self>, user: ToolUser) -> Result<()> {
+        let pool = self.clone();
+        let result = tokio::task::spawn_blocking(move || pool.cleanup(user, None))
+            .await
+            .unwrap_or_else(|_| Err("the cleanup panicked".into()));
+        *self.nix_clean.lock().unwrap() = result.is_ok();
+        result.map_err(|why| {
+            anyhow::anyhow!(
+                "the Nix store's owner (uid {}) is not clean, so no build runs as it: {why}",
+                user.uid
+            )
+        })
+    }
+
     /// A user of its own for an attempt of `executor`, or `None` when the executor runs no tool.
-    /// A Nix build waits for the store's owner; anything else for a free pool user.
+    /// A Nix build waits for the store's owner, and fails while it cannot be cleaned up; anything
+    /// else waits for a free pool user, or a quarantined one whose cleanup now succeeds.
     pub async fn lease(self: &Arc<Self>, executor: &str) -> Result<Option<Lease>> {
         match executor {
             "opentofu" | "ansible" => {}
@@ -290,10 +404,14 @@ impl UserPool {
                     bail!("the Nix store is root's, so no build can run as an unprivileged user");
                 };
                 let turn = self.nix_turn.clone().acquire_owned().await?;
+                if !*self.nix_clean.lock().unwrap() {
+                    self.clean_nix(user).await?;
+                }
                 return Ok(Some(Lease {
                     pool: self.clone(),
                     slot: None,
                     user,
+                    released: false,
                     _nix_turn: Some(turn),
                 }));
             }
@@ -303,7 +421,7 @@ impl UserPool {
             let freed = self.freed.notified();
             tokio::pin!(freed);
             freed.as_mut().enable();
-            {
+            let retry = {
                 let mut slots = self.slots.lock().unwrap();
                 if let Some(i) = slots.iter().position(|s| *s == Slot::Free) {
                     slots[i] = Slot::Leased;
@@ -311,23 +429,101 @@ impl UserPool {
                         pool: self.clone(),
                         slot: Some(i),
                         user: self.users[i],
+                        released: false,
                         _nix_turn: None,
                     }));
                 }
+                let quarantined = slots.iter().position(|s| *s == Slot::Quarantined);
+                if let Some(i) = quarantined {
+                    slots[i] = Slot::Retrying;
+                }
+                quarantined
+            };
+            if let Some(i) = retry {
+                // Back to quarantine unless the cleanup succeeds, even if this lease is dropped.
+                let mut guard = RetryGuard {
+                    pool: self,
+                    slot: i,
+                    leased: false,
+                };
+                let pool = self.clone();
+                let user = self.users[i];
+                let result = tokio::task::spawn_blocking(move || pool.cleanup(user, None))
+                    .await
+                    .unwrap_or_else(|_| Err("the cleanup panicked".into()));
+                match result {
+                    Ok(()) => {
+                        guard.leased = true;
+                        self.slots.lock().unwrap()[i] = Slot::Leased;
+                        tracing::info!(uid = user.uid, "a quarantined tool user is clean again");
+                        return Ok(Some(Lease {
+                            pool: self.clone(),
+                            slot: Some(i),
+                            user,
+                            released: false,
+                            _nix_turn: None,
+                        }));
+                    }
+                    Err(why) => {
+                        tracing::warn!(uid = user.uid, "a tool user is still not clean: {why}")
+                    }
+                }
             }
-            freed.await;
+            // A release, or time to try a quarantined user again.
+            let _ = tokio::time::timeout(RETRY_QUARANTINED, freed).await;
         }
     }
 
-    /// Kills what a previous agent process left running as any tool user, and sweeps what they
-    /// left in the shared directories. At startup, before recovery.
-    pub fn clean_all(&self) {
-        for user in self.all() {
-            if !kill_all(user, KILL_TIMEOUT) {
-                tracing::error!(uid = user.uid, "processes of a tool user survive SIGKILL");
+    /// Kills what a previous agent process left running as any tool user, and removes what they
+    /// left, before recovery. A user whose cleanup fails is quarantined, Nix's included. Fails
+    /// when no pool user is left to run tools as.
+    pub fn clean_all(&self) -> Result<()> {
+        for (i, &user) in self.users.iter().enumerate() {
+            let result = self.cleanup(user, None);
+            if let Err(why) = &result {
+                tracing::error!(
+                    uid = user.uid,
+                    "quarantining a tool user that is not clean: {why}"
+                );
             }
-            self.sweep(user.uid);
-            remove_ipc(user);
+            self.slots.lock().unwrap()[i] = if result.is_ok() {
+                Slot::Free
+            } else {
+                Slot::Quarantined
+            };
+        }
+        if let Some(nix) = self.nix {
+            let result = self.cleanup(nix, None);
+            if let Err(why) = &result {
+                tracing::error!(
+                    uid = nix.uid,
+                    "the Nix store's owner is not clean; no build runs until it is: {why}"
+                );
+            }
+            *self.nix_clean.lock().unwrap() = result.is_ok();
+        }
+        if !self.slots.lock().unwrap().contains(&Slot::Free) {
+            bail!(
+                "none of the {} tool users could be cleaned up, so no attempt could run apart \
+                 from what an earlier one left; see the errors above",
+                self.users.len()
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Puts a user being cleaned up again back in quarantine unless it was leased.
+struct RetryGuard<'a> {
+    pool: &'a UserPool,
+    slot: usize,
+    leased: bool,
+}
+
+impl Drop for RetryGuard<'_> {
+    fn drop(&mut self) {
+        if !self.leased {
+            self.pool.slots.lock().unwrap()[self.slot] = Slot::Quarantined;
         }
     }
 }
@@ -338,6 +534,7 @@ pub struct Lease {
     pool: Arc<UserPool>,
     slot: Option<usize>,
     user: ToolUser,
+    released: bool,
     _nix_turn: Option<OwnedSemaphorePermit>,
 }
 
@@ -348,62 +545,76 @@ impl Lease {
 
     /// Ends the attempt's hold on its user: kills its processes, takes `workspace` back, removes
     /// what the user owns in the shared directories and its IPC objects. Returns the user to the
-    /// pool only when none of its processes is left.
+    /// pool only when all of it is done and verified, and quarantines it otherwise. Nix's user is
+    /// marked unclean before its turn is given back.
     pub async fn release(mut self, workspace: &Path) {
         let user = self.user;
         let pool = self.pool.clone();
         let ws = workspace.to_path_buf();
-        let clean = tokio::task::spawn_blocking(move || {
-            let killed = kill_all(user, KILL_TIMEOUT);
-            if let Err(e) = reclaim(&ws) {
-                tracing::error!(workspace = %ws.display(), "cannot take the workspace back: {e:#}");
-            }
-            pool.sweep(user.uid);
-            remove_ipc(user);
-            killed
-        })
-        .await
-        .unwrap_or(false);
-        let slot = self.slot.take();
-        if let Some(i) = slot {
-            let mut slots = self.pool.slots.lock().unwrap();
-            if clean {
-                slots[i] = Slot::Free;
-            } else {
-                tracing::error!(
-                    uid = user.uid,
-                    "processes of a tool user survive SIGKILL; it is never used again"
-                );
-                slots[i] = Slot::Lost;
-            }
+        let result = tokio::task::spawn_blocking(move || pool.cleanup(user, Some(&ws)))
+            .await
+            .unwrap_or_else(|_| Err("the cleanup panicked".into()));
+        if let Err(why) = &result {
+            tracing::error!(
+                uid = user.uid,
+                "a tool user is not clean, so nothing runs as it until a later cleanup succeeds: {why}"
+            );
         }
+        let clean = result.is_ok();
+        match self.slot {
+            Some(i) => {
+                self.pool.slots.lock().unwrap()[i] =
+                    if clean { Slot::Free } else { Slot::Quarantined };
+            }
+            None => *self.pool.nix_clean.lock().unwrap() = clean,
+        }
+        self.released = true;
         self.pool.freed.notify_waiters();
     }
 }
 
 impl Drop for Lease {
-    /// Only an attempt whose task panicked gets here without a release: its user is lost.
+    /// Only an attempt whose task panicked gets here without a release: its user is not known to
+    /// be clean, so it is quarantined, before a Nix turn is given back.
     fn drop(&mut self) {
-        if let Some(i) = self.slot.take() {
-            self.pool.slots.lock().unwrap()[i] = Slot::Lost;
-            tracing::error!(
-                uid = self.user.uid,
-                "a tool user was not released; never used again"
-            );
+        if self.released {
+            return;
         }
+        match self.slot {
+            Some(i) => self.pool.slots.lock().unwrap()[i] = Slot::Quarantined,
+            None => *self.pool.nix_clean.lock().unwrap() = false,
+        }
+        tracing::error!(
+            uid = self.user.uid,
+            "a tool user was not released; quarantined"
+        );
+        self.pool.freed.notify_waiters();
     }
 }
 
-/// Kills every process of `user`, waiting at most `timeout`. True when none is left.
+/// Kills every process of `user`, waiting at most `timeout`. True when none is left; false when
+/// one survives, or `/proc` cannot be read to tell.
 ///
 /// A child process becomes the user and sends SIGKILL to every process it may signal, `kill(-1)`:
-/// all of the user's, however they were started, and nothing else. It repeats until `/proc`
-/// shows none alive, so a process forked meanwhile dies in the next round. Zombies hold nothing
-/// and do not count.
+/// all of the user's, however they were started, and nothing else. It also signals each thread
+/// group [`live_thread_groups`] found by its ID, which reaches a group whose leader has exited
+/// while its other threads run. As the user it can signal nothing else, even if an ID is reused
+/// meanwhile. It repeats until `/proc` shows no thread of the user alive, so a process forked
+/// meanwhile dies in the next round.
 pub fn kill_all(user: ToolUser, timeout: Duration) -> bool {
     let started = Instant::now();
     loop {
-        if !has_processes(user.uid) {
+        let groups = match live_thread_groups(user.uid) {
+            Ok(groups) => groups,
+            Err(e) => {
+                tracing::error!(
+                    uid = user.uid,
+                    "cannot tell which processes a tool user has: {e}"
+                );
+                return false;
+            }
+        };
+        if groups.is_empty() {
             return true;
         }
         if started.elapsed() > timeout {
@@ -417,38 +628,76 @@ pub fn kill_all(user: ToolUser, timeout: Duration) -> bool {
                     break;
                 }
             }
+            for &pid in &groups {
+                // SAFETY: a plain syscall; the user may only signal its own.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
         });
         std::thread::sleep(Duration::from_millis(20));
     }
 }
 
-/// Whether a process that is not a zombie has `uid` as its real, effective, saved or file
-/// system user.
-fn has_processes(uid: u32) -> bool {
-    let Ok(entries) = fs::read_dir("/proc") else {
-        return false;
+/// The thread groups with a live thread whose real, effective, saved or file system user is
+/// `uid`. Every thread is looked at, not only the leader: a leader that called `pthread_exit`
+/// shows as a zombie while its other threads run. A thread or process that ends while it is read
+/// is gone; any other failure to read `/proc` is an error, never "none".
+fn live_thread_groups(uid: u32) -> io::Result<Vec<libc::pid_t>> {
+    let gone = |e: &io::Error, path: &Path| {
+        e.kind() == io::ErrorKind::NotFound
+            || e.raw_os_error() == Some(libc::ESRCH)
+            || !path.exists()
     };
-    entries.flatten().any(|entry| {
+    let mut found = Vec::new();
+    for entry in fs::read_dir("/proc")? {
+        let entry = entry?;
         let name = entry.file_name();
-        if !name.as_bytes().iter().all(u8::is_ascii_digit) {
-            return false;
-        }
-        let Ok(status) = fs::read_to_string(entry.path().join("status")) else {
-            return false;
+        let Some(pid) = std::str::from_utf8(name.as_bytes())
+            .ok()
+            .and_then(|n| n.parse::<libc::pid_t>().ok())
+        else {
+            continue;
         };
-        let mut zombie = false;
-        let mut mine = false;
-        for line in status.lines() {
-            if let Some(state) = line.strip_prefix("State:") {
-                zombie = state.trim_start().starts_with('Z');
-            } else if let Some(ids) = line.strip_prefix("Uid:") {
-                mine = ids
-                    .split_whitespace()
-                    .any(|id| id.parse::<u32>() == Ok(uid));
+        let process = entry.path();
+        let tasks = match fs::read_dir(process.join("task")) {
+            Ok(tasks) => tasks,
+            Err(e) if gone(&e, &process) => continue,
+            Err(e) => return Err(e),
+        };
+        for task in tasks {
+            let task = match task {
+                Ok(task) => task.path(),
+                Err(e) if gone(&e, &process) => break,
+                Err(e) => return Err(e),
+            };
+            let status = match fs::read_to_string(task.join("status")) {
+                Ok(status) => status,
+                Err(e) if gone(&e, &task) => continue,
+                Err(e) => return Err(e),
+            };
+            if thread_is_live_as(&status, uid) {
+                found.push(pid);
+                break;
             }
         }
-        mine && !zombie
-    })
+    }
+    Ok(found)
+}
+
+/// Whether a `/proc/<pid>/task/<tid>/status` is of a thread that is not dead or a zombie, with
+/// `uid` among its user IDs.
+fn thread_is_live_as(status: &str, uid: u32) -> bool {
+    let mut dead = false;
+    let mut mine = false;
+    for line in status.lines() {
+        if let Some(state) = line.strip_prefix("State:") {
+            dead = matches!(state.trim_start().chars().next(), Some('Z' | 'X'));
+        } else if let Some(ids) = line.strip_prefix("Uid:") {
+            mine = ids
+                .split_whitespace()
+                .any(|id| id.parse::<u32>() == Ok(uid));
+        }
+    }
+    mine && !dead
 }
 
 fn lchown(path: &Path, uid: u32, gid: u32) -> io::Result<()> {
@@ -527,61 +776,98 @@ fn walk(path: &Path, f: &mut dyn FnMut(&Path, &fs::Metadata) -> io::Result<()>) 
 }
 
 /// Removes everything `uid` owns in `dirs`, at any depth, without following links, apart from
-/// what is in `kept`.
-pub fn sweep(dirs: &[PathBuf], kept: &[PathBuf], uid: u32) {
+/// what is in `kept`. `Ok` only when the whole of `dirs` was looked at and each of the user's
+/// entries removed: looking at more than `limit` entries, a folder that cannot be read, or an
+/// entry that cannot be removed is an error, and the user is not clean. Another user's entries
+/// count toward `limit` too: a folder of another user's can hold this one's files, so the sweep
+/// cannot skip it.
+pub fn sweep(dirs: &[PathBuf], kept: &[PathBuf], uid: u32, limit: usize) -> Result<(), String> {
+    let vanished = |e: &io::Error| e.kind() == io::ErrorKind::NotFound;
     let mut seen = 0usize;
+    let mut failures = Vec::new();
     let mut stack: Vec<PathBuf> = dirs.to_vec();
     while let Some(dir) = stack.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if vanished(&e) => continue,
+            Err(e) => {
+                failures.push(format!("cannot read {}: {e}", dir.display()));
+                continue;
+            }
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) => {
+                    failures.push(format!("cannot read {}: {e}", dir.display()));
+                    break;
+                }
+            };
             seen += 1;
-            if seen > SWEEP_LIMIT {
-                tracing::warn!(uid, "stopped sweeping after {SWEEP_LIMIT} entries");
-                return;
+            if seen > limit {
+                return Err(format!(
+                    "the shared folders hold more than {limit} entries, so they were not all \
+                     looked at for what the user left"
+                ));
             }
             let path = entry.path();
             if kept.contains(&path) {
                 continue;
             }
-            let Ok(meta) = fs::symlink_metadata(&path) else {
+            let meta = match fs::symlink_metadata(&path) {
+                Ok(meta) => meta,
+                Err(e) if vanished(&e) => continue,
+                Err(e) => {
+                    failures.push(format!("cannot look at {}: {e}", path.display()));
+                    continue;
+                }
+            };
+            if meta.uid() != uid {
+                if meta.is_dir() {
+                    stack.push(path);
+                }
                 continue;
-            };
-            let removed = if meta.uid() == uid {
-                if meta.is_dir() {
-                    fs::remove_dir_all(&path)
-                } else {
-                    fs::remove_file(&path)
-                }
+            }
+            let removed = if meta.is_dir() {
+                fs::remove_dir_all(&path)
             } else {
-                if meta.is_dir() {
-                    stack.push(path.clone());
-                }
-                Ok(())
+                fs::remove_file(&path)
             };
-            if let Err(e) = removed {
-                tracing::warn!(uid, path = %path.display(), "cannot remove what a tool user left: {e}");
+            match removed {
+                Err(e) if !vanished(&e) => {
+                    failures.push(format!("cannot remove {}: {e}", path.display()))
+                }
+                _ => {}
             }
         }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
     }
 }
 
 /// Removes the System V shared memory, message queues and semaphores `user` owns or created. As
-/// the user itself, in a child: root needs CAP_SYS_ADMIN to remove another user's.
-pub fn remove_ipc(user: ToolUser) {
-    let table = |file: &str| {
-        fs::read_to_string(file)
-            .map(|t| ipc_ids(&t, user.uid))
-            .unwrap_or_default()
+/// the user itself, in a child: root needs CAP_SYS_ADMIN to remove another user's. `Ok` only when
+/// the tables then show none of the user's.
+pub fn remove_ipc(user: ToolUser) -> Result<(), String> {
+    let tables = || {
+        let table = |file: &str| match fs::read_to_string(file) {
+            Ok(t) => Ok(ipc_ids(&t, user.uid)),
+            // A kernel without System V IPC has none.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(format!("cannot read {file}: {e}")),
+        };
+        Ok::<_, String>((
+            table("/proc/sysvipc/shm")?,
+            table("/proc/sysvipc/msg")?,
+            table("/proc/sysvipc/sem")?,
+        ))
     };
-    let (shm, msg, sem) = (
-        table("/proc/sysvipc/shm"),
-        table("/proc/sysvipc/msg"),
-        table("/proc/sysvipc/sem"),
-    );
+    let (shm, msg, sem) = tables()?;
     if shm.is_empty() && msg.is_empty() && sem.is_empty() {
-        return;
+        return Ok(());
     }
     as_user(user, || {
         // SAFETY: plain syscalls on IDs; a stale one fails harmlessly.
@@ -597,6 +883,10 @@ pub fn remove_ipc(user: ToolUser) {
             }
         }
     });
+    match tables()? {
+        (shm, msg, sem) if shm.is_empty() && msg.is_empty() && sem.is_empty() => Ok(()),
+        _ => Err("System V IPC objects of the user remain".to_owned()),
+    }
 }
 
 /// Runs `f` in a child process that has become `user`, and waits for it. `f` must only make
@@ -853,7 +1143,13 @@ mod tests {
         std::os::unix::fs::symlink("/", shared.join("link")).unwrap();
         // Someone else's files would be left; here everything is this user's, so `other` goes
         // with what is in it, and only the kept folder stays.
-        sweep(std::slice::from_ref(&shared), &[shared.join("state")], me);
+        sweep(
+            std::slice::from_ref(&shared),
+            &[shared.join("state")],
+            me,
+            100,
+        )
+        .unwrap();
         let left: Vec<_> = fs::read_dir(&shared)
             .unwrap()
             .map(|e| e.unwrap().file_name())
@@ -861,8 +1157,154 @@ mod tests {
         assert_eq!(left, ["state"]);
         assert!(shared.join("state/work/a/plan.bin").exists());
         // A user with nothing there removes nothing.
-        sweep(std::slice::from_ref(&shared), &[], 4_000_009);
+        sweep(std::slice::from_ref(&shared), &[], 4_000_009, 100).unwrap();
         assert!(shared.join("state/work/a/plan.bin").exists());
+    }
+
+    fn pool_of(ids: &[u32], nix: Option<u32>) -> Arc<UserPool> {
+        Arc::new(
+            UserPool::new(
+                ids.iter().map(|&id| user(id)).collect(),
+                nix.map(user),
+                user(65534),
+                vec![],
+            )
+            .unwrap(),
+        )
+    }
+
+    fn fail_cleanup(pool: &UserPool, uid: u32, fail: bool) {
+        let mut failing = pool.fail_cleanup.lock().unwrap();
+        failing.retain(|&u| u != uid);
+        if fail {
+            failing.push(uid);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_user_whose_startup_cleanup_fails_is_quarantined_until_one_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+        let (a, b) = (4_300_001, 4_300_002);
+        let pool = pool_of(&[a, b], None);
+        fail_cleanup(&pool, a, true);
+        pool.clean_all().unwrap();
+        assert_eq!(pool.quarantined(), [a]);
+        let lease = pool.lease("opentofu").await.unwrap().unwrap();
+        assert_eq!(lease.user().uid, b, "only the clean user");
+        // While a's cleanup still fails, nothing is leased: b is taken, a is not clean.
+        let waiting = {
+            let pool = pool.clone();
+            tokio::spawn(async move { pool.lease("ansible").await.unwrap().unwrap() })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        pool.freed.notify_waiters();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!waiting.is_finished(), "a is leased while not clean");
+        assert_eq!(pool.quarantined(), [a]);
+        // Once a cleanup of a succeeds, a is leased again.
+        fail_cleanup(&pool, a, false);
+        pool.freed.notify_waiters();
+        let leased = tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(leased.user().uid, a);
+        assert!(pool.quarantined().is_empty());
+        lease.release(&gone).await;
+        leased.release(&gone).await;
+        assert!(pool.quarantined().is_empty());
+    }
+
+    #[test]
+    fn the_agent_does_not_start_when_no_user_can_be_cleaned_up() {
+        let pool = pool_of(&[4_300_011, 4_300_012], None);
+        fail_cleanup(&pool, 4_300_011, true);
+        fail_cleanup(&pool, 4_300_012, true);
+        let err = pool.clean_all().unwrap_err().to_string();
+        assert!(err.contains("none of the 2 tool users"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_user_whose_release_fails_is_not_leased_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+        let only = 4_300_021;
+        let pool = pool_of(&[only], None);
+        let lease = pool.lease("opentofu").await.unwrap().unwrap();
+        fail_cleanup(&pool, only, true);
+        lease.release(&gone).await;
+        assert_eq!(pool.quarantined(), [only]);
+        let next = tokio::time::timeout(Duration::from_millis(300), pool.lease("opentofu")).await;
+        assert!(next.is_err(), "the quarantined user was leased again");
+    }
+
+    #[tokio::test]
+    async fn the_nix_user_runs_no_build_while_its_cleanup_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+        let nix = 4_300_032;
+        let pool = pool_of(&[4_300_031], Some(nix));
+        // At startup.
+        fail_cleanup(&pool, nix, true);
+        pool.clean_all().unwrap();
+        assert_eq!(pool.quarantined(), [nix]);
+        let err = pool.lease("nix").await.unwrap_err().to_string();
+        assert!(err.contains("not clean"), "{err}");
+        assert!(
+            pool.nix_ready().await.is_err(),
+            "the probe does not offer nix"
+        );
+        fail_cleanup(&pool, nix, false);
+        pool.nix_ready().await.unwrap();
+        let lease = pool.lease("nix").await.unwrap().unwrap();
+        // After a build whose cleanup fails, the turn comes back but the user is not clean.
+        fail_cleanup(&pool, nix, true);
+        lease.release(&gone).await;
+        assert_eq!(pool.quarantined(), [nix]);
+        let err = pool.lease("nix").await.unwrap_err().to_string();
+        assert!(err.contains("not clean"), "{err}");
+        fail_cleanup(&pool, nix, false);
+        assert!(pool.lease("nix").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_sweep_that_runs_out_quarantines_its_user() {
+        // Another user's entries, here this test's own, fill the budget of the victim's sweep.
+        let dir = tempfile::tempdir().unwrap();
+        let shared = dir.path().join("shm");
+        fs::create_dir_all(shared.join("hog")).unwrap();
+        for n in 0..50 {
+            fs::write(shared.join("hog").join(n.to_string()), "x").unwrap();
+        }
+        let err = sweep(std::slice::from_ref(&shared), &[], 4_300_041, 20).unwrap_err();
+        assert!(err.contains("more than 20 entries"), "{err}");
+        let pool = Arc::new(
+            UserPool::new(vec![user(4_300_041)], None, user(65534), vec![shared]).unwrap(),
+        );
+        pool.set_sweep_limit(20);
+        let lease = pool.lease("opentofu").await.unwrap().unwrap();
+        lease.release(&dir.path().join("gone")).await;
+        assert_eq!(pool.quarantined(), [4_300_041]);
+        // With room to look at everything, its cleanup succeeds and it is leased again.
+        pool.set_sweep_limit(1000);
+        let again = tokio::time::timeout(Duration::from_secs(5), pool.lease("opentofu"))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(again.user().uid, 4_300_041);
+    }
+
+    #[test]
+    fn a_thread_counts_whatever_its_leader_is() {
+        let status = |state: &str| {
+            format!("Name:\tdetach\nState:\t{state}\nUid:\t10100\t10100\t10100\t10100\n")
+        };
+        assert!(thread_is_live_as(&status("S (sleeping)"), 10100));
+        assert!(!thread_is_live_as(&status("Z (zombie)"), 10100));
+        assert!(!thread_is_live_as(&status("X (dead)"), 10100));
+        assert!(!thread_is_live_as(&status("S (sleeping)"), 10101));
     }
 
     #[test]

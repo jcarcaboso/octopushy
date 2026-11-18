@@ -105,7 +105,10 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
         )
         .context("making the state directory the agent's alone")?;
         // A tool a killed agent left running is stopped before its attempt is reported.
-        tokio::task::spawn_blocking(move || pool.clean_all()).await?;
+        // A user that cannot be cleaned up is quarantined; with none left the agent does not start.
+        tokio::task::spawn_blocking(move || pool.clean_all())
+            .await?
+            .context("cleaning up after a previous agent process")?;
     }
     let probed = availability::probe(&runtime, &opts.nix_store_dir, opts.nix_min_free_bytes).await;
     log_changes(None, &probed);

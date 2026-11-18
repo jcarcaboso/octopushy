@@ -27,12 +27,26 @@ const NIX_UID: u32 = 10001;
 /// A fake `tofu`. `plan` sleeps for `TF_VAR_wait` seconds, or, given `TF_VAR_neighbour`, tries to
 /// reach what is not its own and reports each try, then leaves a process and a file behind.
 const FAKE_TOFU: &str = r#"#!/bin/bash
+# Whether a thread of the detacher this user can see is alive, whatever its thread group leader.
+survivors() {
+  alive=gone
+  for t in /proc/[0-9]*/task/*; do
+    [ "$(cat "$t/comm" 2>/dev/null)" = detach ] || continue
+    st=$(awk '/^State:/ {print $2}' "$t/status" 2>/dev/null)
+    case "$st" in ""|Z|X) ;; *) alive=alive ;; esac
+  done
+  echo "survivor $alive"
+}
 case "$1" in
   version)
     [ -z "$2" ] && { echo "OpenTofu uid=$(id -u)"; exit 0; }
     echo '{"terraform_version":"1.13.1"}' ;;
-  init) echo "initialized" ;;
+  init)
+    if [ -n "${TF_VAR_detach:-}" ]; then "$TF_VAR_detach"; sleep 0.5; survivors; fi
+    if [ -n "${TF_VAR_survivors:-}" ]; then survivors; echo "ids $(id -u)"; fi
+    echo "initialized" ;;
   plan)
+    if [ -n "${TF_VAR_detach:-}" ]; then survivors; "$TF_VAR_detach"; fi
     if [ -n "${TF_VAR_wait:-}" ]; then sleep "$TF_VAR_wait"; fi
     if [ -n "${TF_VAR_neighbour:-}" ]; then
       probe() { if "${@:2}" >/dev/null 2>&1; then echo "probe $1 REACHED"; else echo "probe $1 denied"; fi; }
@@ -175,7 +189,15 @@ async fn run_until_done(
                         .entry(log.attempt_id)
                         .or_default()
                         .extend(log.lines.into_iter().map(|l| l.text)),
-                    Some(Kind::Result(r)) => results.push(r),
+                    // A new cursor sends unacknowledged results again: each counts once.
+                    Some(Kind::Result(r))
+                        if ids.contains(&r.attempt_id.as_str())
+                            && !results
+                                .iter()
+                                .any(|s: &AttemptResult| s.attempt_id == r.attempt_id) =>
+                    {
+                        results.push(r)
+                    }
                     _ => {}
                 }
             }
@@ -188,21 +210,34 @@ async fn run_until_done(
 }
 
 /// Processes, not zombies, whose real, effective, saved or file system user is `uid`.
+/// Threads, not zombies, whose real, effective, saved or file system user is `uid`. Every thread
+/// of every process: a thread group whose leader has exited shows a zombie leader while its
+/// other threads run.
 fn processes_of(uid: u32) -> Vec<String> {
     let mut found = Vec::new();
     for entry in std::fs::read_dir("/proc").unwrap().flatten() {
-        let Ok(status) = std::fs::read_to_string(entry.path().join("status")) else {
+        let Ok(tasks) = std::fs::read_dir(entry.path().join("task")) else {
             continue;
         };
-        let zombie = status
-            .lines()
-            .any(|l| l.starts_with("State:") && l.contains('Z'));
-        let mine = status.lines().any(|l| {
-            l.strip_prefix("Uid:")
-                .is_some_and(|ids| ids.split_whitespace().any(|id| id == uid.to_string()))
-        });
-        if mine && !zombie {
-            found.push(status.lines().next().unwrap_or("").to_owned());
+        for task in tasks.flatten() {
+            let Ok(status) = std::fs::read_to_string(task.path().join("status")) else {
+                continue;
+            };
+            let dead = status.lines().any(|l| {
+                l.strip_prefix("State:")
+                    .is_some_and(|s| matches!(s.trim_start().chars().next(), Some('Z' | 'X')))
+            });
+            let mine = status.lines().any(|l| {
+                l.strip_prefix("Uid:")
+                    .is_some_and(|ids| ids.split_whitespace().any(|id| id == uid.to_string()))
+            });
+            if mine && !dead {
+                found.push(format!(
+                    "{} {}",
+                    task.path().display(),
+                    status.lines().next().unwrap_or("")
+                ));
+            }
         }
     }
     found
@@ -421,4 +456,150 @@ async fn the_agent_uploads_only_what_the_build_made() {
         );
     }
     assert!(processes_of(NIX_UID).is_empty());
+}
+
+/// A program that leaves a thread group whose leader has exited: it forks, the child detaches and
+/// closes its pipes, starts a worker thread and ends its main thread with `pthread_exit`. The
+/// leader then shows as a zombie while the worker runs as the user.
+const DETACH_C: &str = r#"
+#include <pthread.h>
+#include <unistd.h>
+static void *work(void *arg) { (void)arg; for (;;) sleep(1); return 0; }
+int main(void) {
+    if (fork() != 0) return 0;
+    setsid();
+    close(0); close(1); close(2);
+    pthread_t t;
+    pthread_create(&t, 0, work, 0);
+    pthread_exit(0);
+}
+"#;
+
+fn detacher(dir: &Path) -> PathBuf {
+    let source = dir.join("detach.c");
+    let program = dir.join("bin/detach");
+    std::fs::write(&source, DETACH_C).unwrap();
+    let built = std::process::Command::new("cc")
+        .args(["-pthread", "-o"])
+        .arg(&program)
+        .arg(&source)
+        .status()
+        .unwrap();
+    assert!(built.success(), "cc failed");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    program
+}
+
+#[tokio::test]
+#[ignore = "needs root and the tool users: tests/tool-users/run.sh"]
+async fn a_thread_group_whose_leader_exited_dies_before_its_user_runs_again() {
+    let agent = agent(1);
+    let detach = detacher(agent.state.parent().unwrap());
+    // Leaves one in init, which the cleanup after init must kill before plan looks, and one in
+    // plan, which the release must kill.
+    agent
+        .manager
+        .accept(preview("d1", json!({ "TF_VAR_detach": detach })));
+    let (logs, results) = run_until_done(&agent, &["d1"]).await;
+    let first = logs["d1"].join("\n");
+    assert_eq!(results[0].outcome(), Outcome::Succeeded, "{:?}", results[0]);
+    let seen: Vec<&str> = first
+        .lines()
+        .filter(|l| l.starts_with("survivor "))
+        .collect();
+    assert_eq!(
+        seen.first(),
+        Some(&"survivor alive"),
+        "the shape was made: {first}"
+    );
+    assert_eq!(
+        seen.get(1),
+        Some(&"survivor gone"),
+        "the thread left by init outlived the tool run: {first}"
+    );
+    let survivors = processes_of_pool(&agent);
+    assert!(survivors.is_empty(), "outlived the attempt: {survivors:#?}");
+
+    // The next attempt gets the same user, and finds nothing of the last one's running.
+    agent
+        .manager
+        .accept(preview("d2", json!({ "TF_VAR_survivors": "1" })));
+    let (logs, _) = run_until_done(&agent, &["d2"]).await;
+    let second = logs["d2"].join("\n");
+    let uid = |log: &str| {
+        log.lines()
+            .find_map(|l| l.strip_prefix("ids "))
+            .map(str::to_owned)
+    };
+    let used = processes_of_pool(&agent);
+    assert!(used.is_empty(), "{used:#?}");
+    assert!(second.contains("survivor gone"), "{second}");
+    let d1_uid = std::fs::metadata(agent.work.join("d1/out")).map(|m| m.uid().to_string());
+    assert_eq!(uid(&second), d1_uid.ok(), "the same user ran both");
+}
+
+#[tokio::test]
+#[ignore = "needs root and the tool users: tests/tool-users/run.sh"]
+async fn a_user_whose_sweep_another_user_exhausts_is_not_leased_with_its_files() {
+    assert!(users::is_root(), "{NEEDS_ROOT}");
+    let dir = tempfile::tempdir().unwrap();
+    let gone = dir.path().join("gone");
+    let pool = Arc::new(UserPool::discover(Path::new("/nonexistent")).unwrap());
+    pool.keep_out_of_sweeps([dir.path().to_path_buf()]);
+    pool.set_sweep_limit(2_000);
+    let hog = pool.lease("opentofu").await.unwrap().unwrap();
+    let victim = pool.lease("opentofu").await.unwrap().unwrap();
+    let (a, b) = (hog.user(), victim.user());
+
+    // A, still running, keeps more entries than a sweep looks at, in a folder of its own that the
+    // victim's sweep reaches before /tmp.
+    let heap = PathBuf::from(format!("/dev/shm/octopushy-test-hog-{}", a.uid));
+    std::fs::create_dir(&heap).unwrap();
+    for n in 0..5_000 {
+        std::fs::write(heap.join(n.to_string()), "").unwrap();
+        std::os::unix::fs::lchown(heap.join(n.to_string()), Some(a.uid), Some(a.gid)).unwrap();
+    }
+    std::os::unix::fs::lchown(&heap, Some(a.uid), Some(a.gid)).unwrap();
+    // B leaves a credential where the next attempt of its user would find it.
+    let credential = PathBuf::from(format!("/tmp/octopushy-test-credential-{}", b.uid));
+    std::fs::write(&credential, "B's secret").unwrap();
+    std::os::unix::fs::lchown(&credential, Some(b.uid), Some(b.gid)).unwrap();
+    std::fs::set_permissions(&credential, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    victim.release(&gone).await;
+    assert!(
+        pool.quarantined().contains(&b.uid),
+        "B's sweep ran out, yet B is free"
+    );
+    assert!(credential.exists());
+
+    // Every other user can be leased; B cannot, while A keeps its heap.
+    let mut others = Vec::new();
+    while let Ok(lease) = tokio::time::timeout(Duration::from_secs(2), pool.lease("opentofu")).await
+    {
+        let lease = lease.unwrap().unwrap();
+        assert_ne!(lease.user().uid, b.uid, "B was leased with its file left");
+        others.push(lease);
+    }
+    assert_eq!(others.len(), pool.size() - 2);
+
+    // Once A is gone with its heap, B's cleanup succeeds: B comes back without its file.
+    hog.release(&gone).await;
+    assert!(!heap.exists());
+    let a_again = pool.lease("opentofu").await.unwrap().unwrap();
+    assert_eq!(a_again.user(), a);
+    let b_again = tokio::time::timeout(Duration::from_secs(10), pool.lease("opentofu"))
+        .await
+        .expect("B is clean again")
+        .unwrap()
+        .unwrap();
+    assert_eq!(b_again.user(), b);
+    assert!(
+        !credential.exists(),
+        "B was leased again with its file left"
+    );
+    for lease in others.into_iter().chain([a_again, b_again]) {
+        lease.release(&gone).await;
+    }
+    assert!(pool.quarantined().is_empty());
 }

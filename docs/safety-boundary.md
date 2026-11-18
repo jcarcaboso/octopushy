@@ -289,20 +289,31 @@ leased from a fixed pool in the image (`octopushy-tool-0` to `-15`). Before it r
   agent's), and caps its size. Nothing of the user's runs while it does: every process of the
   user is killed when the tool exits.
 
-When the attempt ends, every process of its user is killed (`kill(-1)` as that user, until
-`/proc` shows none), the workspace is taken back (root, 0700), and whatever the user owns in
-`/tmp`, `/var/tmp`, `/dev/shm`, `/dev/mqueue` and `/run/lock`, and its System V IPC objects, are
-removed. Only then may another attempt get the user. A user whose processes survive SIGKILL is
-never leased again. Cancelling or timing out a tool still signals its process group first, and
-the hard kill takes every process of its user. At start the agent kills whatever a previous
-process left running as a tool user, and takes over the state directory of an agent that ran
-as an unprivileged user before.
+When the attempt ends, every process of its user is killed: `kill(-1)` as that user, and each
+of its thread groups by ID, until no thread in `/proc/<pid>/task/*` runs as it, so a group whose
+leader has exited while its other threads run is found and killed too. The workspace is taken
+back (root, 0700), and whatever the user owns in `/tmp`, `/var/tmp`, `/dev/shm`, `/dev/mqueue`
+and `/run/lock`, and its System V IPC objects, are removed. Only when every one of those steps
+is done and verified may another attempt get the user. Otherwise, a process that survives
+SIGKILL, a `/proc` that cannot be read, a workspace not taken back, an entry not removed, IPC
+objects left, or a sweep that runs out of its 200 000-entry budget, the user is quarantined:
+nothing runs as it until a later cleanup of it succeeds, which a lease tries when no user is
+free. Another user's entries count toward the budget: the sweep cannot skip a folder of another
+user's, which may hold this one's files, so a hostile attempt that fills the shared folders can
+quarantine users, costing capacity, but not hand a user's files to its next attempt.
+
+Cancelling or timing out a tool still signals its process group first, and the hard kill takes
+every process of its user. At start the agent cleans every tool user up the same way, after
+whatever a previous process left; a user that cannot be cleaned is quarantined, and with none
+left the agent refuses to start. It also takes over the state directory of an agent that ran as
+an unprivileged user before.
 
 **Nix is kept apart from the agent and from other tools, not from other builds.** Its
 single-user store belongs to one user, the image's `octopushy-agent` (10001), which every build
 must write to. Builds run as that user, never root, one at a time, and the agent uploads only a
-regular file of that user's inside the store. A build can still change what is in the store for
-the next one, as before.
+regular file of that user's inside the store. Its cleanup after each build is the one above; when
+it fails, no build runs, and the agent does not offer `nix`, until a later cleanup succeeds. A
+build can still change what is in the store for the next one, as before.
 
 **An agent that is not root cannot drop.** A development agent, or the image run with
 `--user`, runs every tool as its own user, which can read the agent's files, and runs one

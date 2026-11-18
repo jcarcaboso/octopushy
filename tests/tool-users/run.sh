@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The agent's root-only tests: each attempt's tools as a user of its own (tools/users.rs). They
 # need root and the tool users, so they run as root in a container of tests/tool-users/Containerfile:
-#   tests/tool-users/run.sh
+#   tests/tool-users/run.sh [test name filter]
 # With AGENT_IMAGE set (a build of agent/Containerfile), it also checks that image: it starts as
 # root, has the tool users, has no folder everyone can write to that the agent does not sweep,
 # and probes its tools as nobody.
@@ -23,7 +23,7 @@ echo "== Root-only tests, as root"
 "$engine" run --rm --user 0 \
   -v "$root:/src:ro" -v "$scratch/target:/target" -v "$scratch/registry:/usr/local/cargo/registry" \
   -e CARGO_TARGET_DIR=/target -w /src/agent "$image" \
-  cargo test --locked -p octopushy --test tool_users -- --ignored --test-threads=1
+  cargo test --locked -p octopushy --test tool_users -- --ignored --test-threads=1 "$@"
 
 if [[ -n ${AGENT_IMAGE:-} ]]; then
   echo "== The agent image $AGENT_IMAGE"
