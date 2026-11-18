@@ -57,6 +57,8 @@ test:
 
 # Static validation and generated-contract drift, without running a deployment.
 check:
+    scripts/release.sh --check
+    scripts/checks/toolchains.sh
     cd agent && cargo fmt --all -- --check
     cd agent && cargo clippy --workspace --all-targets --locked -- -D warnings
     cd frontend && pnpm run typecheck
@@ -86,6 +88,10 @@ demo: dev-db
 # Live rollout is blocked on read-only provider refresh; see tests/proxmox/README.md.
 proxmox-e2e: dev-db
     tests/proxmox/run.sh
+
+# Prepare a release: set the version (MAJOR.MINOR.PATCH) in every file that carries it (scripts/release.sh).
+release version:
+    scripts/release.sh {{version}}
 
 # Build the container images by hand, tagged with the given version (a v<version> tag publishes a release: .github/workflows/images.yml).
 images version:

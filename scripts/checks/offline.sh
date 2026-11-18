@@ -9,6 +9,10 @@ tag=$(sh agent/ansible/tag.sh)
 grep -q "skorcius/octopushy:$tag\"" backend/src/Octopushy.Server/Options/OctopushyOptions.cs \
     || { echo "AnsibleImage in OctopushyOptions.cs is not $tag" >&2; exit 1; }
 
+# One product version in every file that carries it, and toolchains that agree.
+bash scripts/release.sh --check
+bash scripts/checks/toolchains.sh
+
 python3 -m unittest discover -s tests/ansible -p 'test_*.py' -v
 python3 -m unittest discover -s tests/remote-worker -p 'test_*.py' -v
 python3 -m unittest discover -s tests/e2e -p 'test_*.py' -v

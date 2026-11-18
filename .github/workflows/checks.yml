@@ -23,9 +23,22 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      # The SDK the images build with (backend/Containerfile), not the newest one global.json accepts.
+      - id: sdk
+        name: Read the pinned .NET SDK
+        run: echo "version=$(scripts/checks/toolchains.sh sdk)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        env:
+          # A directory of its own, so no newer SDK the runner image ships can win the roll-forward.
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
         with:
-          global-json-file: global.json
+          dotnet-version: ${{ steps.sdk.outputs.version }}
+      - name: The pinned .NET SDK is the one in use
+        env:
+          SDK: ${{ steps.sdk.outputs.version }}
+        run: |
+          dotnet --version
+          test "$(dotnet --version)" = "$SDK"
       # Testcontainers owns its PostgreSQL container; no dev-db or retained service.
       - name: Backend tests (disposable PostgreSQL)
         run: dotnet test backend/Octopushy.slnx
@@ -58,10 +71,13 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
-        with:
-          toolchain: 1.98.1
-          components: rustfmt, clippy
+      # agent/rust-toolchain.toml selects it in agent/; the offline job checks it against the image.
+      - name: Install the Rust toolchain from rust-toolchain.toml
+        run: |
+          channel=$(sed -nE 's/^channel = "([^"]+)"$/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal --component rustfmt,clippy
+          rustc --version
+          test "$(rustc --version | cut -d' ' -f2)" = "$channel"
       # Do not enable --ignored: those tests run real Podman/OpenTofu.
       - name: Rust workspace tests
         run: cargo test --workspace --locked

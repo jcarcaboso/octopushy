@@ -22,7 +22,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A v<version> tag publishes nothing unless every file that carries the version carries it.
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: The tag matches the version files
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: scripts/release.sh --check "${TAG#v}"
+
   image:
+    needs: version
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
