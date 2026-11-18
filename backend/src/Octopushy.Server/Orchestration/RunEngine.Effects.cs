@@ -36,8 +36,10 @@ public sealed partial class RunEngine
         [StepNames.AuthorizeKey] = new AuthorizeKeyEffect(),
         [StepNames.VerifyKey] = new VerifyLoginEffect(),
         [StepNames.ConfirmRefused] = new ConfirmRefusedEffect(),
+        [StepNames.Plan] = new PlanEffect(),
         [StepNames.Apply] = new ForgetOutputsEffect(),
         [StepNames.Verify] = new AttachVerifyEffect(),
+        [StepNames.VerifyAbsent] = new VerifyAbsentEffect(),
     };
 
     /// <summary>
@@ -92,6 +94,81 @@ public sealed partial class RunEngine
         {
             resource.VerifiedAt = now;
             return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="StepNames.Plan"/> of a guest's run, of any operation, once the plan has passed the checks every plan goes through:
+    /// the refusal of a plan that acts on a machine that is not the guest's, and a provision's host-key replan, both in
+    /// <c>ApplyEffectsAsync</c> ahead of this. It records the check and skips what a plan without changes leaves nothing to do for.
+    /// A provision's or a retire's unprotect stays to run only when the plan removes the guest's machine, or changes its container
+    /// in place, and the guest owns that machine. See docs/safety-boundary.md.
+    /// </summary>
+    private sealed class PlanEffect : IStepEffect
+    {
+        public async Task ApplyAsync(RunEngine engine, OctopushyDb db, VariableStore store, Run run, Step step, Resource resource, JsonNode? outputs,
+            DateTimeOffset now, CancellationToken cancellationToken)
+        {
+            resource.CheckedInputsHash = run.InputsHash;
+            resource.CheckedRevisionId = run.RevisionId;
+            resource.CheckedAt = now;
+            if (outputs?["hasChanges"]?.GetValue<bool>() == false)
+            {
+                if (run.Operation == Operations.Provision)
+                {
+                    resource.SyncedInputsHash = run.InputsHash;
+                }
+
+                foreach (var later in run.Steps.Where(s => s.Name is StepNames.Unprotect or StepNames.Apply or StepNames.Approval))
+                {
+                    later.Status = StepStatuses.Skipped;
+                    later.Detail = "The plan has no changes.";
+                }
+            }
+
+            if (run.Operation is Operations.Provision or Operations.Retire
+                && run.Steps.SingleOrDefault(s => s.Name == StepNames.Unprotect) is { Status: StepStatuses.Pending } unprotect)
+            {
+                var planned = RunContext.Parse(run.Context);
+                if (!GuestVmPlan.LiftsProtection(outputs, planned))
+                {
+                    unprotect.Status = StepStatuses.Skipped;
+                    unprotect.Detail = $"The plan does not replace or delete this guest's {planned.Proxmox.Machine}"
+                        + (planned.Proxmox.MachineKind == "lxc" ? ", or change it in place" : "") + ", so its protection stays as it is.";
+                }
+                else if (resource.ParentAddress is not { } installation || planned.Proxmox.Vmid is not { } vmid
+                         || !await SafetyBoundary.OwnsAsync(db, resource, installation, planned.Proxmox.Node, vmid, cancellationToken))
+                {
+                    // Only a VM the guest owns loses its protection: one it is bound to, or its own create that did not finish.
+                    unprotect.Status = StepStatuses.Skipped;
+                    unprotect.Detail = $"This guest does not own {planned.Proxmox.Machine} {planned.Proxmox.Vmid} on {planned.Proxmox.Node}, so its protection stays as it is.";
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// <see cref="StepNames.VerifyAbsent"/>, a retire's last step: the guest's machine is gone. The guest is retired, its binding and
+    /// reservation are cleared, the credentials Octopushy held for it are removed, and its services are retired with their runs.
+    /// </summary>
+    private sealed class VerifyAbsentEffect : IStepEffect
+    {
+        public async Task ApplyAsync(RunEngine engine, OctopushyDb db, VariableStore store, Run run, Step step, Resource resource, JsonNode? outputs,
+            DateTimeOffset now, CancellationToken cancellationToken)
+        {
+            resource.RetiredAt = now;
+            resource.VerifiedAt = now;
+            resource.BoundVmid = null;
+            resource.BoundInstallation = null;
+            resource.ReservedVmid = null;
+            resource.ReservedNode = null;
+            resource.ReservedInstallation = null;
+            resource.ReservedAt = null;
+            resource.ReservationAppliedAt = null;
+            await GuestAccessCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
+            await GuestHostCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
+            await ContainerHostKeys.RemoveAsync(db, run.ResourceId, cancellationToken);
+            await engine.RetireServicesAsync(db, run, now, cancellationToken);
         }
     }
 }

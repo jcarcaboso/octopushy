@@ -687,44 +687,6 @@ public sealed partial class RunEngine(
 
         switch (step.Name)
         {
-            case StepNames.Plan:
-                resource.CheckedInputsHash = run.InputsHash;
-                resource.CheckedRevisionId = run.RevisionId;
-                resource.CheckedAt = now;
-                if (outputs?["hasChanges"]?.GetValue<bool>() == false)
-                {
-                    if (run.Operation == Operations.Provision)
-                    {
-                        resource.SyncedInputsHash = run.InputsHash;
-                    }
-
-                    foreach (var later in run.Steps.Where(s => s.Name is StepNames.Unprotect or StepNames.Apply or StepNames.Approval))
-                    {
-                        later.Status = StepStatuses.Skipped;
-                        later.Detail = "The plan has no changes.";
-                    }
-                }
-
-                if (run.Operation is Operations.Provision or Operations.Retire
-                    && run.Steps.SingleOrDefault(s => s.Name == StepNames.Unprotect) is { Status: StepStatuses.Pending } unprotect)
-                {
-                    var planned = RunContext.Parse(run.Context);
-                    if (!GuestVmPlan.LiftsProtection(outputs, planned))
-                    {
-                        unprotect.Status = StepStatuses.Skipped;
-                        unprotect.Detail = $"The plan does not replace or delete this guest's {planned.Proxmox.Machine}"
-                            + (planned.Proxmox.MachineKind == "lxc" ? ", or change it in place" : "") + ", so its protection stays as it is.";
-                    }
-                    else if (resource.ParentAddress is not { } installation || planned.Proxmox.Vmid is not { } vmid
-                             || !await SafetyBoundary.OwnsAsync(db, resource, installation, planned.Proxmox.Node, vmid, cancellationToken))
-                    {
-                        // Only a VM the guest owns loses its protection: one it is bound to, or its own create that did not finish.
-                        unprotect.Status = StepStatuses.Skipped;
-                        unprotect.Detail = $"This guest does not own {planned.Proxmox.Machine} {planned.Proxmox.Vmid} on {planned.Proxmox.Node}, so its protection stays as it is.";
-                    }
-                }
-
-                break;
             case StepNames.Apply when run.Operation == Operations.Provision:
                 resource.AppliedInputsHash = run.InputsHash;
                 resource.AppliedRevisionId = run.RevisionId;
@@ -797,21 +759,6 @@ public sealed partial class RunEngine(
                 }
 
                 resource.VerifiedAt = now;
-                break;
-            case StepNames.VerifyAbsent:
-                resource.RetiredAt = now;
-                resource.VerifiedAt = now;
-                resource.BoundVmid = null;
-                resource.BoundInstallation = null;
-                resource.ReservedVmid = null;
-                resource.ReservedNode = null;
-                resource.ReservedInstallation = null;
-                resource.ReservedAt = null;
-                resource.ReservationAppliedAt = null;
-                await GuestAccessCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
-                await GuestHostCredentials.RemoveAsync(db, run.ResourceId, cancellationToken);
-                await ContainerHostKeys.RemoveAsync(db, run.ResourceId, cancellationToken);
-                await RetireServicesAsync(db, run, now, cancellationToken);
                 break;
         }
     }
