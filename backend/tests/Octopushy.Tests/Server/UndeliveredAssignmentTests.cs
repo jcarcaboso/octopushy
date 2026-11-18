@@ -320,6 +320,52 @@ public class UndeliveredAssignmentTests(PostgresFixture postgres) : IClassFixtur
         Assert.DoesNotContain(Drain(old), m => m.Assignment is not null);
     }
 
+    [Fact]
+    public async Task A_registration_whose_commit_went_through_and_then_failed_leaves_no_earlier_connection_to_hand_the_read_to()
+    {
+        var commit = new FailsAfterCommit();
+        await using var server = await ServerHarness.StartAsync(postgres,
+            services: s => s.ConfigureDbContext<OctopushyDb>(options => options.AddInterceptors(commit)));
+        var agent = await server.ConnectAgentAsync("home");
+        var connections = server.Services.GetRequiredService<AgentConnections>();
+        connections.Disconnect(agent.Id);
+        await server.SyncAndTrustAsync();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var old = new AgentStream
+        {
+            OnWrite = m => m.ResultAck is not null ? Block(entered, release) : Task.CompletedTask,
+        };
+        var oldConnection = await ConnectAsync(server, agent, old, Hello([TofuStateStore.AgentCapability]));
+        Assert.True(connections.Get(agent.Id)!.TrySend(new ServerMessage { ResultAck = new ResultAck { AttemptId = "x" } }));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await server.TickAsync();
+        var preview = await PreviewAsync(server);
+        Assert.Equal(AttemptStatuses.Assigned, preview.Status);
+        Assert.NotEmpty(await ReleasesAsync(server, preview.Id));
+
+        // The newer connection's Hello queues the read again and is committed, and the commit is then reported as failed.
+        commit.Armed = true;
+        var fresh = new AgentStream();
+        fresh.Send(new AgentMessage { Hello = Hello([TofuStateStore.AgentCapability]) });
+        var service = ActivatorUtilities.CreateInstance<AgentChannelService>(server.Services);
+        var call = await AgentStream.CallAsAsync(server, agent);
+        await Record.ExceptionAsync(() => service.Connect(fresh, fresh, call));
+        Assert.False(commit.Armed);
+        Assert.Equal(AttemptStatuses.Queued, (await PreviewAsync(server)).Status);
+
+        // The earlier connection is the agent's no more, so a dispatch cannot hand it the read a second time.
+        Assert.Null(connections.Get(agent.Id));
+        await server.TickAsync();
+        release.SetResult();
+        await oldConnection.WaitAsync(TimeSpan.FromSeconds(10));
+
+        preview = await PreviewAsync(server);
+        Assert.Equal((AttemptStatuses.Queued, 1), (preview.Status, preview.Number));
+        Assert.Empty(await ReleasesAsync(server, preview.Id));
+        Assert.DoesNotContain(Drain(old), m => m.Assignment is not null);
+    }
+
     [Theory]
     [InlineData("query")]
     [InlineData("save")]
@@ -486,6 +532,20 @@ public class UndeliveredAssignmentTests(PostgresFixture postgres) : IClassFixtur
                 await Release.Task;
             }
             return result;
+        }
+    }
+
+    /// <summary>Reports the commit of a Hello's transaction as failed, once, after it went through.</summary>
+    private sealed class FailsAfterCommit : DbTransactionInterceptor
+    {
+        public bool Armed { get; set; }
+
+        public override Task TransactionCommittedAsync(DbTransaction transaction, TransactionEndEventData eventData, CancellationToken cancellationToken = default)
+        {
+            if (!Armed || !eventData.Context!.ChangeTracker.Entries<Attempt>().Any())
+                return Task.CompletedTask;
+            Armed = false;
+            throw new InvalidOperationException("The connection dropped before the commit was acknowledged.");
         }
     }
 

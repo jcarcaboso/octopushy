@@ -735,7 +735,17 @@ public sealed partial class RunEngine
             await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
             await ReconcileHelloAsync(db, session.AgentId, hello, cancellationToken);
             await WriteOfferAsync(db, session, cancellationToken);
-            await transaction.CommitAsync(CancellationToken.None);
+            try
+            {
+                await transaction.CommitAsync(CancellationToken.None);
+            }
+            catch
+            {
+                // Whether it was committed is not known. If it was, reads are queued again while the earlier connection is
+                // still the agent's: it is closed here, under the gate, so none is handed to it a second time.
+                connections.Disconnect(session.AgentId);
+                throw;
+            }
             register();
             signal.Wake();
         }, cancellationToken);
