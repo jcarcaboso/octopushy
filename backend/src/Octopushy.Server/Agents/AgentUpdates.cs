@@ -468,7 +468,9 @@ public sealed class AgentUpdates(
                         Unpause(agent);
                     }
                 }
-                else if (Failure(change, agent, clock.GetUtcNow()) is { } failure)
+                // Failing lifts the pause: never while another change to its guest may still restart it, or work handed to the
+                // agent then would be interrupted. It fails once that change has settled.
+                else if (Failure(change, agent, clock.GetUtcNow()) is { } failure && !await GuestChangingAsync(db, agent, ct))
                     await FailAsync(db, agent, failure.Code, failure.Why, ct);
                 if (db.ChangeTracker.HasChanges())
                     await db.SaveChangesAsync(ct);
@@ -487,10 +489,15 @@ public sealed class AgentUpdates(
     {
         if (change is not { Status: ChangeStatuses.Applied } || !change.Runs.All(r => RunStatuses.IsTerminal(r.Status)) || Back(agent) is not { } session)
             return null;
+        return await GuestChangingAsync(db, agent, ct) ? null : session;
+    }
+
+    /// <summary>A change to the agent's guest is queued, assigned or running: it may still restart the agent.</summary>
+    private static Task<bool> GuestChangingAsync(OctopushyDb db, AgentRecord agent, CancellationToken ct)
+    {
         var guest = agent.UpdateResourceId;
-        var pending = await db.Attempts.AnyAsync(a => a.Mutating && a.Step!.Run!.ResourceId == guest
+        return db.Attempts.AnyAsync(a => a.Mutating && a.Step!.Run!.ResourceId == guest
             && (a.Status == AttemptStatuses.Queued || a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running), ct);
-        return pending ? null : session;
     }
 
     private static string LostSentence(AgentRecord agent, AgentSession session, IReadOnlyList<string> lost)

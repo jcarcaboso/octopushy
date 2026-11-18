@@ -723,6 +723,60 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
     }
 
     [Fact]
+    public async Task An_update_past_its_deadline_does_not_fail_while_another_change_to_its_guest_still_runs()
+    {
+        var clock = new TestClock();
+        await using var setup = await StartAsync(Lab(), clock: clock);
+        var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
+        await ProvisionAsync(setup, runner);
+        var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
+        Assert.Equal(HttpStatusCode.NoContent, (await setup.RequestAsync(worker.Id)).StatusCode);
+        Assignment? rollout = null;
+        await WorkAsync(setup, runner, stop: a =>
+        {
+            if (a is not { Executor: "ansible", Action: "run" })
+                return false;
+            rollout = a;
+            return true;
+        });
+        Assert.NotNull(rollout);
+        await runner.ReportAsync(rollout, Outcome.Succeeded, ConfigureRunTests.Recap());
+        await setup.Server.TickAsync();
+        worker = await setup.Server.ReconnectAsync(worker, Target);
+
+        // Another setup of the guest goes out to the runner before the update is moved on, and is still running.
+        var resource = await setup.Server.ResourceAsync(Guest);
+        (await setup.Client.PostAsJsonAsync($"/api/guests/{resource.Id}/configure", new { action = "setup" })).EnsureSuccessStatusCode();
+        Assignment? second = null;
+        await WorkAsync(setup, runner, approve: true, stop: a =>
+        {
+            if (a is not { Executor: "ansible", Action: "run" })
+                return false;
+            second = a;
+            return true;
+        });
+        Assert.NotNull(second);
+
+        // Past the deadline, the update neither ends nor fails: failing would lift the pause while that setup may restart the agent.
+        var record = await setup.RecordAsync(worker.Id);
+        clock.Now = record.UpdateReleasedAt!.Value.AddMinutes(31);
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+        Assert.Equal("updating", await setup.StateAsync(worker.Id));
+        Assert.True((await setup.RecordAsync(worker.Id)).Draining);
+
+        // Once it has settled, the update is done.
+        await runner.ReportAsync(second, Outcome.Succeeded, ConfigureRunTests.Recap());
+        await setup.Server.TickAsync();
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+        Assert.Equal("current", await setup.StateAsync(worker.Id));
+        var done = await setup.RecordAsync(worker.Id);
+        Assert.Null(done.UpdateFailure);
+        Assert.False(done.Draining);
+    }
+
+    [Fact]
     public async Task A_revert_after_an_update_that_never_restarted_the_agent_ends_only_once_its_change_applied()
     {
         await using var setup = await StartAsync(Lab());
