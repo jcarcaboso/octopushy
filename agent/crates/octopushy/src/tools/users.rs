@@ -52,8 +52,18 @@ pub const MAX_POOL: usize = 64;
 /// Entries of a workspace that stay the agent's. The agent writes into `ansible/` between a
 /// tool's runs, so a link the tool left there would redirect a write made as root.
 pub const AGENT_OWNED: &[&str] = &[crate::attempts::workspace::MARKER, "ansible"];
-/// Writable by everyone, so swept of what a user leaves when its attempt ends.
-pub const SHARED_WRITABLE: &[&str] = &["/tmp", "/var/tmp", "/dev/shm", "/dev/mqueue", "/run/lock"];
+/// The one folder tool users share and can write to: Python's multiprocessing, which Ansible's
+/// queues use, makes its semaphores there. Kept sticky and swept of what a user leaves.
+pub const SHARED_WRITABLE: &[&str] = &["/dev/shm"];
+/// Folders everyone could write to in a stock image, which tool users can write to no longer:
+/// root's, 0755, in the image and again when the agent starts. Each attempt's temporary files
+/// go in its workspace instead, and leave with it.
+pub const LOCKED_DOWN: &[&str] = &["/tmp", "/var/tmp", "/run/lock", "/dev/mqueue"];
+/// Where the agent makes each isolated Ansible attempt a private folder for its secrets, in
+/// memory: only the agent adds to it.
+pub const SECRETS_DIR: &str = "/tmp/octopushy-secrets";
+/// Where the agent makes a probe that runs as another user a home of its own.
+pub const PROBE_HOMES: &str = "/tmp/octopushy-probes";
 /// How long a release keeps killing a user's processes before it gives up on the user.
 const KILL_TIMEOUT: Duration = Duration::from_secs(30);
 /// The most entries a sweep of the shared directories looks at.
@@ -174,8 +184,10 @@ pub struct UserPool {
     nix_clean: Mutex<bool>,
     /// Who version probes run as: nobody.
     probe: ToolUser,
-    /// The directories everyone can write to.
+    /// The folders tool users can write to, swept at every cleanup.
     shared: Vec<PathBuf>,
+    /// Folders tool users must not be able to write to; see [`LOCKED_DOWN`].
+    locked: Vec<PathBuf>,
     /// The agent's own directories, which a sweep leaves alone even inside a shared one: the
     /// state and work directories, whose workspaces are taken back instead, and the Nix store.
     kept: Mutex<Vec<PathBuf>>,
@@ -220,12 +232,73 @@ impl UserPool {
                 gid: m.gid(),
             })
             .filter(|u| u.uid != 0 && u.gid != 0);
+        // The agent's own folders in /tmp hold folders it made for users: swept too.
         let shared = SHARED_WRITABLE
             .iter()
             .map(PathBuf::from)
             .filter(|p| p.is_dir())
+            .chain([PathBuf::from(SECRETS_DIR), PathBuf::from(PROBE_HOMES)])
             .collect();
-        Self::new(users, nix, probe, shared)
+        let mut pool = Self::new(users, nix, probe, shared)?;
+        pool.locked = LOCKED_DOWN
+            .iter()
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
+            .collect();
+        Ok(pool)
+    }
+
+    /// Makes the folders in [`LOCKED_DOWN`] root's and writable by root alone, and `/dev/shm`
+    /// root's and sticky, so no user can rename another's entries there. At start, before any
+    /// tool runs: a volume or a tmpfs may have replaced what the image set.
+    pub fn lock_down(&self) -> Result<()> {
+        for (path, mode) in self.locked.iter().map(|p| (p, 0o755)).chain(
+            self.shared
+                .iter()
+                .take(SHARED_WRITABLE.len())
+                .map(|p| (p, 0o1777)),
+        ) {
+            let dir = match Dir::open(path) {
+                Ok(dir) => dir,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e).with_context(|| format!("opening {}", path.display())),
+            };
+            dir.chown(0, 0)
+                .and_then(|()| dir.chmod(mode))
+                .with_context(|| format!("locking {} down", path.display()))?;
+        }
+        Ok(())
+    }
+
+    /// Removes what `user` left in the locked folders before they were locked: once, at start,
+    /// after its processes were killed, as no user can add to them any more.
+    fn sweep_locked(&self, user: ToolUser) -> Result<(), String> {
+        let kept = self.kept.lock().unwrap().clone();
+        sweep(
+            &self.locked,
+            &kept,
+            user.uid,
+            self.sweep_limit.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Whether the folders in [`LOCKED_DOWN`] are still root's and writable by root alone.
+    fn check_locked(&self) -> Result<(), String> {
+        for path in &self.locked {
+            let entry = Dir::open(path).and_then(|d| d.stat());
+            match entry {
+                Ok(e) if e.uid == 0 && e.mode & 0o022 == 0 => {}
+                Ok(_) => {
+                    return Err(format!(
+                        "{} can be written to by tool users",
+                        path.display()
+                    ));
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("cannot look at {}: {e}", path.display())),
+            }
+        }
+        Ok(())
     }
 
     pub fn new(
@@ -278,6 +351,7 @@ impl UserPool {
             nix_clean: Mutex::new(true),
             probe,
             shared,
+            locked: Vec::new(),
             kept: Mutex::new(Vec::new()),
             unreclaimed: Mutex::new(Vec::new()),
             sweep_limit: AtomicUsize::new(SWEEP_LIMIT),
@@ -346,6 +420,10 @@ impl UserPool {
         let kept = self.kept.lock().unwrap().clone();
         let limit = self.sweep_limit.load(Ordering::Relaxed);
         if let Err(e) = sweep(&self.shared, &kept, user.uid, limit) {
+            problems.push(e);
+        }
+        // Nothing of the user's can be in them while they stay locked.
+        if let Err(e) = self.check_locked() {
             problems.push(e);
         }
         if let Err(e) = remove_ipc(user) {
@@ -586,7 +664,9 @@ impl UserPool {
     /// when no pool user is left to run tools as.
     pub fn clean_all(&self) -> Result<()> {
         for (i, &user) in self.users.iter().enumerate() {
-            let result = self.cleanup(user, None);
+            let result = self
+                .cleanup(user, None)
+                .and_then(|()| self.sweep_locked(user));
             if let Err(why) = &result {
                 tracing::error!(
                     uid = user.uid,
@@ -600,7 +680,9 @@ impl UserPool {
             };
         }
         if let Some(nix) = self.nix {
-            let result = self.cleanup(nix, None);
+            let result = self
+                .cleanup(nix, None)
+                .and_then(|()| self.sweep_locked(nix));
             if let Err(why) = &result {
                 tracing::error!(
                     uid = nix.uid,

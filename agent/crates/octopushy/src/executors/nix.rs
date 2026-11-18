@@ -238,6 +238,8 @@ async fn build(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     let mut settings = vec![
         ("HOME".to_owned(), home.to_string_lossy().into_owned()),
         ("TMPDIR".to_owned(), tmp.to_string_lossy().into_owned()),
+        ("TMP".to_owned(), tmp.to_string_lossy().into_owned()),
+        ("TEMP".to_owned(), tmp.to_string_lossy().into_owned()),
     ];
     if let Some(cache) = &cfg.nix.cache_dir {
         mk(cache)?;

@@ -287,20 +287,47 @@ leased from a fixed pool in the image (`octopushy-tool-0` to `-15`). Before it r
 - **What the agent reads back is hostile input.** It opens a file a tool wrote without following
   a link in any path component, refuses a file with another link (a link to a file of the
   agent's), and caps its size. Nothing of the user's runs while it does: every process of the
-  user is killed when the tool exits.
+  user is killed when the tool exits. If one survives, or `/proc` cannot tell, the attempt stops
+  there: nothing the tool left is read, no other tool runs, and no state is reported. A change
+  that may have run is `uncertain`, as an apply that returns no state is, and never retried; a
+  read is `failed`. The user is quarantined.
+- **Walks as root follow no link.** Handing a workspace over, taking it back and sweeping go by
+  directory descriptor: `openat` with `O_NOFOLLOW|O_DIRECTORY`, `fstatat` without following,
+  `unlinkat`, and a change of owner made on the very entry checked, so a folder swapped for a
+  link in between fails the walk instead of leading it into the agent's files.
+- **No folder to share but `/dev/shm`.** `/tmp`, `/var/tmp`, `/run/lock` and `/dev/mqueue` are
+  root's and 0755, in the image and again when the agent starts, for a tmpfs or volume mounted
+  over them; each cleanup checks they still are. A tool's temporary files go in its workspace
+  (`TMPDIR`, `TMP` and `TEMP`), and leave with it; Ansible's secrets go in a private folder the
+  agent makes for the attempt in its own `/tmp/octopushy-secrets`. `/dev/shm` has to stay
+  writable: Python's multiprocessing, which Ansible's queues use, makes its semaphores there,
+  and Ansible stops without it. It stays root's and sticky, so no user can rename or remove
+  another's entries at its top, where glibc and Python make theirs.
 
 When the attempt ends, every process of its user is killed: `kill(-1)` as that user, and each
 of its thread groups by ID, until no thread in `/proc/<pid>/task/*` runs as it, so a group whose
 leader has exited while its other threads run is found and killed too. The workspace is taken
-back (root, 0700), and whatever the user owns in `/tmp`, `/var/tmp`, `/dev/shm`, `/dev/mqueue`
-and `/run/lock`, and its System V IPC objects, are removed. Only when every one of those steps
-is done and verified may another attempt get the user. Otherwise, a process that survives
-SIGKILL, a `/proc` that cannot be read, a workspace not taken back, an entry not removed, IPC
-objects left, or a sweep that runs out of its 200 000-entry budget, the user is quarantined:
-nothing runs as it until a later cleanup of it succeeds, which a lease tries when no user is
-free. Another user's entries count toward the budget: the sweep cannot skip a folder of another
-user's, which may hold this one's files, so a hostile attempt that fills the shared folders can
-quarantine users, costing capacity, but not hand a user's files to its next attempt.
+back (root, 0700), and whatever the user owns in `/dev/shm` and in the folders the agent made
+for it, and its System V IPC objects, are removed. Only when every one of those steps is done
+and verified may another attempt get the user. Otherwise, a process that survives SIGKILL, a
+`/proc` that cannot be read, a workspace not taken back, an entry not removed, IPC objects left,
+a locked folder found writable, or a sweep that runs out of its 200 000-entry budget, the user is
+quarantined: nothing runs as it until a later cleanup of it succeeds. A lease that finds no
+free user tries each quarantined one in turn. A cleanup is a job of its own that holds its user,
+or the Nix turn, until it ends, so no second cleanup and no lease of that user can start
+meanwhile, even if whoever waited for it stops waiting. Another user's entries count toward the
+budget: the sweep cannot skip a folder of another user's, which may hold this one's files, so a
+hostile attempt that fills `/dev/shm` can quarantine users, costing capacity, but not hand a
+user's files to its next attempt.
+
+**A residual risk in `/dev/shm`.** A user can make a folder there that others can write to, and
+move what is in it while a sweep runs elsewhere; a sweep cannot see a file moved behind it, so
+another scan would not close this. A victim's file left in such a folder could then reach the
+victim user's next attempt. That needs the victim to write into the folder, at a path the
+attacker chose: no tool the agent runs writes anything but semaphores and shared memory there,
+which glibc and Python make at its top, where the sticky bit keeps other users from moving them.
+Code from the repository that writes elsewhere in `/dev/shm` on purpose is not kept from doing
+so.
 
 Cancelling or timing out a tool still signals its process group first, and the hard kill takes
 every process of its user. At start the agent cleans every tool user up the same way, after

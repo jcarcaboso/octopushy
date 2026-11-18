@@ -995,11 +995,15 @@ async fn version_line(bin: &Path, args: &[&str], user: Option<ToolUser>) -> Resu
         user.apply(&mut cmd);
         // Nothing of the agent's environment, as for a tool, and a home of its own for the run:
         // Ansible makes `~/.ansible` even to print its version.
-        let dir = Path::new(PROBE_HOMES).join(user.uid.to_string());
-        users::agent_dir(Path::new(PROBE_HOMES))
+        let dir = Path::new(users::PROBE_HOMES).join(user.uid.to_string());
+        users::agent_dir(Path::new(users::PROBE_HOMES))
             .and_then(|()| users::private_dir(&dir, user))
             .context("making a home for the probe")?;
-        cmd.env_clear().env("HOME", &dir);
+        cmd.env_clear()
+            .env("HOME", &dir)
+            .env("TMPDIR", &dir)
+            .env("TMP", &dir)
+            .env("TEMP", &dir);
         if let Some(path) = std::env::var_os("PATH") {
             cmd.env("PATH", path);
         }
@@ -1012,9 +1016,6 @@ async fn version_line(bin: &Path, args: &[&str], user: Option<ToolUser>) -> Resu
     }
     result
 }
-
-/// Where probes that run as another user get a home of their own.
-const PROBE_HOMES: &str = "/tmp/octopushy-probes";
 
 async fn version_output(mut cmd: Command, bin: &Path, args: &[&str]) -> Result<String> {
     let out = cmd

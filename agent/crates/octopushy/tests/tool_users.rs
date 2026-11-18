@@ -65,13 +65,17 @@ case "$1" in
       probe own-marker-write sh -c "echo x >> '$TF_VAR_self/attempt.json'"
       probe own-change-record touch "$TF_VAR_self.change-started"
       probe own-workspace-entry touch "$TF_VAR_self/planted"
+      for d in /tmp /var/tmp /run/lock /dev/mqueue; do
+        probe "create-in-$d" sh -c "[ -d $d ] && touch $d/planted-\$\$"
+        probe "mkdir-in-$d" sh -c "[ -d $d ] && mkdir $d/planted-dir-\$\$"
+      done
       echo "ids $(id -u) $(id -g) [$(id -G)]"
       echo "umask $(umask)"
       echo "fds $(ls /proc/self/fd | tr '\n' ' ')"
       grep -E '^(NoNewPrivs|CapEff|CapPrm|CapAmb)' /proc/self/status | tr -s '\t' ' '
       # Things that must not outlive the attempt.
       setsid sleep 1000 </dev/null >/dev/null 2>&1 &
-      echo left > "/tmp/octopushy-test-left-$(id -u)"
+      echo left > "/dev/shm/octopushy-test-left-$(id -u)"
     fi
     exit 0 ;;
   apply)
@@ -134,6 +138,8 @@ fn agent(max: u32) -> Agent {
     // As `agent run` does: the agent's own directories, here under /tmp, are never swept.
     pool.keep_out_of_sweeps([state.clone(), work.clone(), store.clone(), bin.clone()]);
     pool.set_kill_timeout(Duration::from_secs(2));
+    // As `agent run` does: no tool user can write to /tmp and the like.
+    pool.lock_down().unwrap();
     assert_eq!(pool.nix_user().map(|u| u.uid), Some(NIX_UID));
     let nix_cache = state.join("cache/nix");
     users::secure_state(&state, &work, Some((&nix_cache, pool.nix_user().unwrap()))).unwrap();
@@ -300,7 +306,7 @@ async fn a_tool_reaches_neither_the_agent_nor_another_attempt_and_leaves_nothing
     }
 
     let probes: Vec<&String> = log.iter().filter(|l| l.starts_with("probe ")).collect();
-    assert_eq!(probes.len(), 14, "every probe ran: {text}");
+    assert_eq!(probes.len(), 22, "every probe ran: {text}");
     let reached: Vec<&&String> = probes.iter().filter(|l| l.ends_with("REACHED")).collect();
     assert!(reached.is_empty(), "the tool reached: {reached:#?}");
 
@@ -333,7 +339,7 @@ async fn a_tool_reaches_neither_the_agent_nor_another_attempt_and_leaves_nothing
             "uid {uid}: {:?}",
             processes_of(uid)
         );
-        assert!(!Path::new(&format!("/tmp/octopushy-test-left-{uid}")).exists());
+        assert!(!Path::new(&format!("/dev/shm/octopushy-test-left-{uid}")).exists());
     }
     // Its workspace is root's again, and the agent's files are as they were.
     for ws in ["a", "b"] {
@@ -557,17 +563,20 @@ async fn a_user_whose_sweep_another_user_exhausts_is_not_leased_with_its_files()
     let victim = pool.lease("opentofu").await.unwrap().unwrap();
     let (a, b) = (hog.user(), victim.user());
 
-    // A, still running, keeps more entries than a sweep looks at, in a folder of its own that the
-    // victim's sweep reaches before /tmp.
-    let heap = PathBuf::from(format!("/dev/shm/octopushy-test-hog-{}", a.uid));
-    std::fs::create_dir(&heap).unwrap();
-    for n in 0..5_000 {
-        std::fs::write(heap.join(n.to_string()), "").unwrap();
-        std::os::unix::fs::lchown(heap.join(n.to_string()), Some(a.uid), Some(a.gid)).unwrap();
+    // A, still running, keeps more entries than a sweep looks at at the top of /dev/shm, the one
+    // folder users share, which a sweep reads before any folder below it.
+    let heap: Vec<PathBuf> = (0..5_000)
+        .map(|n| PathBuf::from(format!("/dev/shm/octopushy-test-hog-{}-{n}", a.uid)))
+        .collect();
+    for file in &heap {
+        std::fs::write(file, "").unwrap();
+        std::os::unix::fs::lchown(file, Some(a.uid), Some(a.gid)).unwrap();
     }
-    std::os::unix::fs::lchown(&heap, Some(a.uid), Some(a.gid)).unwrap();
-    // B leaves a credential where the next attempt of its user would find it.
-    let credential = PathBuf::from(format!("/tmp/octopushy-test-credential-{}", b.uid));
+    // B leaves a credential further down, where the next attempt of its user would find it.
+    let below = PathBuf::from("/dev/shm/octopushy-test-below");
+    std::fs::create_dir(&below).unwrap();
+    std::fs::set_permissions(&below, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let credential = below.join(format!("credential-{}", b.uid));
     std::fs::write(&credential, "B's secret").unwrap();
     std::os::unix::fs::lchown(&credential, Some(b.uid), Some(b.gid)).unwrap();
     std::fs::set_permissions(&credential, std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -589,22 +598,34 @@ async fn a_user_whose_sweep_another_user_exhausts_is_not_leased_with_its_files()
     }
     assert_eq!(others.len(), pool.size() - 2);
 
-    // Once A is gone with its heap, B's cleanup succeeds: B comes back without its file.
+    // A's own sweep runs out on its heap too, so A ends quarantined. Once the heap is gone, both
+    // come clean again: B without its file.
     hog.release(&gone).await;
-    assert!(!heap.exists());
-    let a_again = pool.lease("opentofu").await.unwrap().unwrap();
-    assert_eq!(a_again.user(), a);
-    let b_again = tokio::time::timeout(Duration::from_secs(10), pool.lease("opentofu"))
-        .await
-        .expect("B is clean again")
-        .unwrap()
-        .unwrap();
-    assert_eq!(b_again.user(), b);
+    assert!(pool.quarantined().contains(&a.uid));
+    // A's sweep removed some of it before it ran out.
+    for file in &heap {
+        let _ = std::fs::remove_file(file);
+    }
+    let mut again = Vec::new();
+    for _ in 0..2 {
+        let lease = tokio::time::timeout(Duration::from_secs(10), pool.lease("opentofu"))
+            .await
+            .expect("a user is clean again")
+            .unwrap()
+            .unwrap();
+        again.push(lease);
+    }
+    let mut uids: Vec<u32> = again.iter().map(|l| l.user().uid).collect();
+    uids.sort();
+    let mut expected = vec![a.uid, b.uid];
+    expected.sort();
+    assert_eq!(uids, expected);
     assert!(
         !credential.exists(),
         "B was leased again with its file left"
     );
-    for lease in others.into_iter().chain([a_again, b_again]) {
+    std::fs::remove_dir(&below).unwrap();
+    for lease in others.into_iter().chain(again) {
         lease.release(&gone).await;
     }
     assert!(pool.quarantined().is_empty());
@@ -746,4 +767,69 @@ async fn a_survivor_that_cannot_be_killed_stops_the_attempt() {
         child.kill().unwrap();
         child.wait().unwrap();
     }
+}
+
+/// Runs `script` with `sh` as `user`, with no groups but its own, and says whether it succeeded.
+fn run_as(user: users::ToolUser, script: &str) -> bool {
+    use std::os::unix::process::CommandExt;
+    std::process::Command::new("/bin/sh")
+        .args(["-c", script])
+        .uid(user.uid)
+        .gid(user.gid)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .current_dir("/")
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+#[tokio::test]
+#[ignore = "needs root and the tool users: tests/tool-users/run.sh"]
+async fn a_user_cannot_leave_a_file_where_another_could_move_it_past_the_sweep() {
+    assert!(users::is_root(), "{NEEDS_ROOT}");
+    let dir = tempfile::tempdir().unwrap();
+    let gone = dir.path().join("gone");
+    let pool = Arc::new(UserPool::discover(Path::new("/nonexistent")).unwrap());
+    pool.lock_down().unwrap();
+    let attacker = pool.lease("opentofu").await.unwrap().unwrap();
+    let victim = pool.lease("opentofu").await.unwrap().unwrap();
+    let (a, v) = (attacker.user(), victim.user());
+
+    // The relocation the review showed: the attacker makes a folder everyone can write to, the
+    // victim writes its file into it, and the attacker moves the file behind the sweep. Neither
+    // can write to a locked folder at all.
+    for locked in users::LOCKED_DOWN {
+        if !Path::new(locked).is_dir() {
+            continue;
+        }
+        let meta = std::fs::metadata(locked).unwrap();
+        assert_eq!((meta.uid(), meta.mode() & 0o7777), (0, 0o755), "{locked}");
+        assert!(
+            !run_as(a, &format!("mkdir -m 777 {locked}/attacker")),
+            "the attacker made a folder in {locked}"
+        );
+        assert!(
+            !run_as(v, &format!("echo secret > {locked}/victim")),
+            "the victim wrote to {locked}"
+        );
+    }
+    // /dev/shm stays shared, and sticky: what the victim leaves at its top, no other user can
+    // move, and the victim's release removes it.
+    let shm = std::fs::metadata("/dev/shm").unwrap();
+    assert_eq!((shm.uid(), shm.mode() & 0o7777), (0, 0o1777));
+    let top = format!("/dev/shm/octopushy-test-victim-{}", v.uid);
+    assert!(run_as(v, &format!("echo secret > {top}")));
+    assert!(
+        !run_as(a, &format!("mv {top} /dev/shm/octopushy-test-moved")),
+        "another user moved the victim's file"
+    );
+    victim.release(&gone).await;
+    assert!(
+        !Path::new(&top).exists(),
+        "the victim's file outlived its release"
+    );
+    assert!(pool.quarantined().is_empty());
+    attacker.release(&gone).await;
 }

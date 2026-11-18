@@ -63,6 +63,10 @@ RUN nix --version && test "$(HOME=/tmp/nix-check nix eval --expr 1+1)" = 2 && rm
 # image's octopushy-agent user's, so `--user 10001` still works on a fresh volume (with one
 # attempt at a time); as root the agent takes it over at start.
 USER root
+# No tool user may write to /tmp and the like: each attempt's temporary files go in its workspace.
+# /dev/shm, a mount of the runtime's, stays shared and sticky. The agent does this again at start,
+# for a volume or a tmpfs mounted over them.
+RUN chmod 0755 /tmp /var/tmp && if [ -d /run/lock ]; then chmod 0755 /run/lock; fi
 ENV STATE_DIRECTORY=/var/lib/octopushy-agent \
     HOME=/var/lib/octopushy-agent \
     OCTOPUSHY_LOG=info

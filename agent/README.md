@@ -253,9 +253,12 @@ shared checkout is required. See the opt-in
     capabilities and `no_new_privs`. The user owns its workspace's contents and nothing
     else; the agent's state is root's and private. Nix builds run as the store's owner,
     one at a time. Attempts run in parallel, up to the server's `max_concurrency` and the
-    number of users. When an attempt ends every process of its user is killed and what
-    it left in `/tmp` and the like is removed before another attempt gets it. As root
-    without those users the agent refuses to start. See
+    number of users. Tool users cannot write to `/tmp`, `/var/tmp`, `/run/lock` or
+    `/dev/mqueue`, which the agent locks at start; temporary files go in the workspace.
+    When an attempt ends every process of its user is killed and what it left in
+    `/dev/shm` is removed before another attempt gets it; a user that cannot be cleaned
+    up is quarantined. A process of the user that outlives a tool run stops the attempt,
+    uncertain if it was a change. As root without those users the agent refuses to start. See
     [the safety boundary](../docs/safety-boundary.md#tools-apart-from-the-agent-and-from-each-other).
   - **As any other user** (`just agent`, or the image with `--user`), tools run as the
     agent's own user, which can read the agent's files, one attempt at a time whatever

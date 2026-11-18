@@ -32,9 +32,10 @@ if [[ -n ${AGENT_IMAGE:-} ]]; then
     [ "$(id -u)" = 0 ] || { echo "the image does not start as root" >&2; exit 1; }
     for n in 0 15; do id "octopushy-tool-$n" >/dev/null; done
     [ "$(stat -c %u /nix/store)" = 10001 ] || { echo "/nix/store is not 10001s" >&2; exit 1; }
-    # Every folder everyone can write to must be one the agent sweeps (SHARED_WRITABLE).
+    # No folder of the image is one everyone can write to: /tmp and the like are locked
+    # (LOCKED_DOWN); /dev/shm, which the agent sweeps, is mounted by the runtime.
     extra=$(find / -xdev \( -path /proc -o -path /sys \) -prune -o -type d -perm -0002 -print \
-      | grep -vxE "/tmp|/var/tmp|/dev/shm|/dev/mqueue|/run/lock" || true)
+      | grep -vxE "/dev/shm|/dev/mqueue" || true)
     [ -z "$extra" ] || { echo "folders everyone can write to: $extra" >&2; exit 1; }
     # Setuid and setgid programs are harmless under no_new_privs; listed for the record.
     find / -xdev \( -path /proc -o -path /sys \) -prune -o -type f -perm /6000 -print
@@ -47,5 +48,10 @@ if [[ -n ${AGENT_IMAGE:-} ]]; then
     done
     printf "%s\n" "$out" | grep -qE "^nix *(available|UNAVAILABLE: the Nix store has)" || { echo "nix does not run" >&2; exit 1; }
   '
+  echo "== Real tools as tool users, in $AGENT_IMAGE, with the privileges compose.yaml grants"
+  "$engine" run --rm --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+    --cap-add KILL --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges:true \
+    --tmpfs /tmp:size=128m,mode=1777 -v "$root/tests/tool-users/image-check.sh:/image-check.sh:ro" \
+    --entrypoint /bin/sh "$AGENT_IMAGE" /image-check.sh
 fi
 echo "ok"

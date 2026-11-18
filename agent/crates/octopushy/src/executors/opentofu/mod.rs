@@ -231,7 +231,9 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
     if !rt.is_container() {
         let tmp = ws.join("tmp");
         mk(&tmp)?;
-        settings.push(("TMPDIR".into(), tmp.to_string_lossy().into_owned()));
+        for name in ["TMPDIR", "TMP", "TEMP"] {
+            settings.push((name.into(), tmp.to_string_lossy().into_owned()));
+        }
     }
     let mut env: Vec<(String, String)> = Vec::new();
     let mut names: Vec<String> = Vec::new();

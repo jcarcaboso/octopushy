@@ -105,6 +105,9 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
         )
         .context("making the state directory the agent's alone")?;
         // A tool a killed agent left running is stopped before its attempt is reported.
+        // No tool user can write to /tmp and the like; /dev/shm stays shared, and sticky.
+        pool.lock_down()
+            .context("locking down the folders tool users could write to")?;
         // A user that cannot be cleaned up is quarantined; with none left the agent does not start.
         tokio::task::spawn_blocking(move || pool.clean_all())
             .await?
