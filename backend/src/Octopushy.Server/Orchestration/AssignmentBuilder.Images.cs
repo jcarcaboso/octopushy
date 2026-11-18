@@ -18,7 +18,7 @@ public sealed partial class AssignmentBuilder
     {
         if (!TemplateImages.IsBuild(attempt) || build.AttemptId != attempt.Id)
             throw new AssignmentException("The attempt is not this image's build.");
-        if (await db.Agents.AnyAsync(a => a.Id == agentId && (a.Disabled || a.Draining), cancellationToken))
+        if (await db.Agents.AnyAsync(a => a.Id == agentId && (a.Disabled || a.Draining || a.UpdateState == AgentUpdateStates.Updating), cancellationToken))
             throw new AssignmentException("This agent is disabled or draining and cannot receive new assignments.");
         var input = new JsonObject
         {

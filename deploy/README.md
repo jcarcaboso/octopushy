@@ -77,6 +77,12 @@ artifacts. Secret-release evidence therefore lives only as long as its run.
 Database rows commit before files are removed. Each pass also sweeps attempt
 files with no database row, so a restart finishes interrupted file cleanup.
 
+## Agent updates
+
+An agent updated from **Agents** has `Octopushy__AgentUpdates__ComeBackMinutes`, default
+`30`, to connect again on the new version once the step that restarts it is handed out.
+See docs/worker-routing.md.
+
 ## Changes from the UI
 
 When connecting a lab repository that names an external workflows repository,

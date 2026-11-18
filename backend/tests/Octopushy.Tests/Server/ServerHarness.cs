@@ -396,6 +396,31 @@ public sealed class ServerHarness : IAsyncDisposable
         ConnectAsync(name, labels, [TofuStateStore.AgentCapability, WorkerReachability.Capability], "podman", FakeAgent.ReachEverything,
             new[] { "opentofu", "proxmox", "ansible" }.Except(unavailable.Keys).ToArray(), unavailable: unavailable);
 
+    /// <summary>
+    /// <paramref name="agent"/> connects again as a new process would, saying hello with <paramref name="version"/> and offering
+    /// <paramref name="executors"/>, or what it offered before. Its old connection is closed; use the agent returned.
+    /// </summary>
+    /// <param name="running">The attempts its Hello says it still executes.</param>
+    public async Task<FakeAgent> ReconnectAsync(FakeAgent agent, string version, string[]? executors = null,
+        IReadOnlyDictionary<string, string>? unavailable = null, params string[] running)
+    {
+        var old = agent.Session;
+        var clock = Services.GetRequiredService<TimeProvider>();
+        await WithDbAsync(db => db.Agents.Where(a => a.Id == agent.Id).ExecuteUpdateAsync(u => u
+            .SetProperty(a => a.Version, version).SetProperty(a => a.ConnectedAt, clock.GetUtcNow()).SetProperty(a => a.LastSeenAt, clock.GetUtcNow())));
+        var session = new AgentSession(agent.Id, old.Name, executors ?? old.Executors, old.Capabilities, old.ToolRuntime,
+            unavailable is null ? null : AgentAvailability.Unavailable(unavailable))
+        {
+            Responder = old.Responder, RemoteAddress = old.RemoteAddress, Version = version,
+        };
+        session.ReportRunning(running, clock.GetUtcNow());
+        // As the channel does: the Hello is settled and the connection registered in one step.
+        var connections = Services.GetRequiredService<AgentConnections>();
+        await Engine.RegisterAsync(session, new Hello { AgentVersion = version, RunningAttemptIds = { running } },
+            () => connections.Add(session), CancellationToken.None);
+        return new FakeAgent(this, agent.Id, session);
+    }
+
     private async Task<FakeAgent> ConnectAsync(string name, string[] labels, string[] capabilities, string? runtime,
         Func<ReachabilityProbe, ReachabilityReport>? responder, string[]? executors = null, int maxConcurrency = 4,
         System.Net.IPAddress? remote = null, IReadOnlyDictionary<string, string>? unavailable = null)

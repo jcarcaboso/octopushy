@@ -16,8 +16,9 @@ namespace Octopushy.Server.Agents;
 /// Updates an agent to the server's own version through the guest it runs on: a change to the guest's definition that sets
 /// <c>inputs.worker_agent_version</c> and drops <c>inputs.worker_agent_digest</c>, approved as the operator who asked, rolled
 /// out by the guest's setup run, which another agent runs. The agent is paused first and the pause lifted once it is back on
-/// the target version, or the update failed. One update at a time; the rest queue, and a failure empties the queue.
-/// See docs/worker-routing.md.
+/// the target version, or the update failed. A step that may restart the agent is held by dispatch until the agent has no
+/// other work (<see cref="RunEngine"/>). The version the agent ran before is recorded, and Revert is an update back to it.
+/// One update at a time; the rest queue, and a failure empties the queue of updates. See docs/worker-routing.md.
 /// </summary>
 public sealed class AgentUpdates(
     RunEngine engine,
@@ -33,9 +34,6 @@ public sealed class AgentUpdates(
     public const string DigestInput = "worker_agent_digest";
     public const string NameInput = "worker_agent_name";
 
-    /// <summary>How long after its change is applied an agent has to come back reporting the target version.</summary>
-    public static readonly TimeSpan ComeBackWithin = TimeSpan.FromMinutes(15);
-
     /// <summary>The server's own version: the one version of the backend, the agent and the frontend.</summary>
     public static string TargetVersion { get; } = typeof(AgentUpdates).Assembly.GetName().Version is { } v
         ? $"{v.Major}.{v.Minor}.{v.Build}"
@@ -49,9 +47,9 @@ public sealed class AgentUpdates(
 
     /// <summary>
     /// What the API shows of an agent's guest and update. <c>Plain</c> is the state with no update asked for: <c>current</c>,
-    /// <c>available</c> or <c>unavailable</c>.
+    /// <c>available</c> or <c>unavailable</c>. <c>RevertRefused</c> says why Revert is not offered, null when it is.
     /// </summary>
-    public sealed record Assessment(AgentGuest? Guest, AgentUpdateState Update, AgentUpdateState Plain);
+    public sealed record Assessment(AgentGuest? Guest, AgentUpdateState Update, AgentUpdateState Plain, string? RevertRefused);
 
     /// <summary>Whether <paramref name="version"/> is <paramref name="target"/> or newer. A version that does not read as one is older.</summary>
     public static bool AtLeast(string? version, string target) =>
@@ -125,6 +123,14 @@ public sealed class AgentUpdates(
             .ToListAsync(ct);
         var changeIds = agents.Where(a => a.UpdateChangeId is not null).Select(a => a.UpdateChangeId!.Value).ToList();
         var runs = await db.Changes.AsNoTracking().Where(c => changeIds.Contains(c.Id)).ToDictionaryAsync(c => c.Id, c => c.RunIds, ct);
+        var runIds = runs.Values.SelectMany(ids => ids).ToList();
+        var statuses = runIds.Count == 0
+            ? []
+            : await db.Runs.AsNoTracking().Where(r => runIds.Contains(r.Id)).ToDictionaryAsync(r => r.Id, r => r.Status, ct);
+        var holdIds = agents.Where(a => a.UpdateHoldAttemptId is not null).Select(a => a.UpdateHoldAttemptId!.Value).ToList();
+        var holdRuns = holdIds.Count == 0
+            ? []
+            : await db.Attempts.AsNoTracking().Where(a => holdIds.Contains(a.Id)).ToDictionaryAsync(a => a.Id, a => a.RunId, ct);
         var settings = await db.RepositorySettings.AsNoTracking().SingleOrDefaultAsync(s => s.Id == 1, ct);
         var credential = settings is null || settings.CredentialKind == "none"
                          || await db.StoreEntries.AsNoTracking().AnyAsync(e => e.Key == RepositorySync.CredentialKey, ct);
@@ -140,30 +146,90 @@ public sealed class AgentUpdates(
                 guest = null;
             var declared = guest is null ? null : Text(guest.Json["inputs"]![VersionInput]);
             var dto = guest is null ? null : new AgentGuest(resource!.Id, guest.Address, declared);
-            var runId = agent.UpdateChangeId is { } changeId && runs.TryGetValue(changeId, out var ids) && ids.Count > 0 ? ids[^1] : (Guid?)null;
+            var changeRuns = agent.UpdateChangeId is { } changeId && runs.TryGetValue(changeId, out var ids) ? ids : [];
+            var runId = changeRuns.Count > 0 ? changeRuns[^1] : (Guid?)null;
+            string? Why(string target) => Unavailable(agent, guest, ambiguous, head, resources, settings, credential, agents, target);
+            var revertRefused = RevertRefusal(agent, declared, Why);
+            var inFlight = agent.UpdateState is AgentUpdateStates.Queued or AgentUpdateStates.Updating;
+            var phase = agent.UpdateState == AgentUpdateStates.Updating
+                ? PhaseOf(agent, changeRuns.Where(statuses.ContainsKey).Select(id => statuses[id]))
+                : null;
+            var waiting = phase is AgentUpdatePhases.WaitingForIdle or AgentUpdatePhases.WaitingForUnconfirmedChange;
             AgentUpdateState State(string state, string? reason = null) =>
-                new(state, TargetVersion, reason, state is "updating" or "failed" ? agent.UpdateChangeId : null,
-                    state is "updating" or "failed" ? runId : null);
+                new(state,
+                    state is "queued" or "updating" or "failed" && agent.UpdateRevert ? agent.UpdatePreviousVersion : agent.UpdateTargetVersion ?? TargetVersion,
+                    reason,
+                    state is "updating" or "failed" ? agent.UpdateChangeId : null,
+                    state is "updating" or "failed" ? runId : null,
+                    state == "updating" ? phase : null,
+                    state == "failed" ? agent.UpdateFailure : null,
+                    agent.UpdatePreviousVersion,
+                    !inFlight && revertRefused is null,
+                    state is "queued" or "updating" or "failed" && agent.UpdateRevert,
+                    phase == AgentUpdatePhases.Restarting ? agent.UpdateReleasedAt + ComeBackWithin : null,
+                    waiting ? agent.UpdateHoldAttemptId : null,
+                    waiting && agent.UpdateHoldAttemptId is { } held ? holdRuns.GetValueOrDefault(held) : null);
 
             var plain = AtLeast(agent.Version, TargetVersion) ? State("current")
-                : Unavailable(agent, guest, ambiguous, head, resources, settings, credential, agents) is { } why ? State("unavailable", why)
+                : Why(TargetVersion) is { } why ? State("unavailable", why)
                 : State("available");
+            plain = plain with { TargetVersion = TargetVersion, Revert = false };
             var update = agent.UpdateState switch
             {
                 AgentUpdateStates.Updating => State("updating"),
                 AgentUpdateStates.Queued => State("queued"),
-                AgentUpdateStates.Failed when plain.State != "current" => State("failed", agent.UpdateDetail),
+                // An agent current again hides a failed update, unless the failure is about the version it runs: a revert,
+                // or an update that lost executors.
+                AgentUpdateStates.Failed when plain.State != "current" || agent.UpdateRevert
+                                              || agent.UpdateFailure == AgentUpdateFailures.LostExecutors => State("failed", agent.UpdateDetail),
                 _ => plain,
             };
-            result[agent.Id] = new Assessment(dto, update, plain);
+            result[agent.Id] = new Assessment(dto, update, plain, revertRefused);
         }
 
         return result;
     }
 
-    /// <summary>Why an agent on an older version cannot be updated from here, or null when it can.</summary>
+    /// <summary>
+    /// Why a Revert is not offered to <paramref name="agent"/>, or null when it is: a version from before its last update is
+    /// recorded, is older than the server's (otherwise it is an update), and the agent or its guest is not on it already.
+    /// </summary>
+    private static string? RevertRefusal(AgentRecord agent, string? declared, Func<string, string?> unavailable)
+    {
+        if (agent.UpdatePreviousVersion is not { } previous)
+            return $"No version from before an update is recorded for {agent.Name}.";
+        if (AtLeast(previous, TargetVersion))
+            return $"{previous} is not older than the server's version; update {agent.Name} instead.";
+        if (SameVersion(agent.Version, previous) && SameVersion(declared, previous))
+            return $"{agent.Name} runs {previous} already, and its guest declares it.";
+        return unavailable(previous);
+    }
+
+    /// <summary>Where an update in flight stands, from its agent and the statuses of its change's runs.</summary>
+    private static string PhaseOf(AgentRecord agent, IEnumerable<string> runStatuses)
+    {
+        var statuses = runStatuses.ToList();
+        if (statuses.Contains(RunStatuses.AwaitingApproval))
+            return AgentUpdatePhases.AwaitingApproval;
+        if (statuses.Contains(RunStatuses.Blocked))
+            return AgentUpdatePhases.Blocked;
+        if (agent.UpdateHold == AgentUpdateHolds.Busy)
+            return AgentUpdatePhases.WaitingForIdle;
+        if (agent.UpdateHold == AgentUpdateHolds.UnconfirmedChange)
+            return AgentUpdatePhases.WaitingForUnconfirmedChange;
+        return agent.UpdateReleasedAt is null ? AgentUpdatePhases.RollingOut : AgentUpdatePhases.Restarting;
+    }
+
+    /// <summary>Whether two versions are the same: by number when both read as one, otherwise as written.</summary>
+    public static bool SameVersion(string? a, string? b) =>
+        Parse(a) is { } x && Parse(b) is { } y ? x == y : a is not null && a == b;
+
+    /// <summary>How long an agent has to come back on its update's version once the step that restarts it is handed out.</summary>
+    private TimeSpan ComeBackWithin => TimeSpan.FromMinutes(Math.Max(1, options.Value.AgentUpdates.ComeBackMinutes));
+
+    /// <summary>Why an agent on an older version cannot be updated to <paramref name="target"/> from here, or null when it can.</summary>
     private string? Unavailable(AgentRecord agent, GuestDefinition? guest, bool ambiguous, Head head, IReadOnlyList<Resource> resources,
-        RepositorySettings? settings, bool credential, IReadOnlyList<AgentRecord> agents)
+        RepositorySettings? settings, bool credential, IReadOnlyList<AgentRecord> agents, string target)
     {
         if (head.Unusable is { } unusable)
             return unusable;
@@ -186,8 +252,9 @@ public sealed class AgentUpdates(
             return $"{guest.Address} has errors in the lab repository; fix them first.";
         if (guest.Setup is null)
             return $"{guest.Address}'s workflow has no setup stage to roll the new version out.";
-        if (guest.Json["inputs"]?[DigestInput] is null && AtLeast(Text(guest.Json["inputs"]![VersionInput]), TargetVersion))
-            return $"{guest.Address} already declares {TargetVersion}, and its setup has not rolled it out yet.";
+        var declared = Text(guest.Json["inputs"]![VersionInput]);
+        if (guest.Json["inputs"]?[DigestInput] is null && (target == TargetVersion ? AtLeast(declared, target) : SameVersion(declared, target)))
+            return $"{guest.Address} already declares {target}, and its setup has not rolled it out yet.";
         var labels = PolicyResolver.AgentLabels(head.Repository, guest).Value;
         var guestAddress = ConfigureInputs.AddressOf(guest);
         var others = agents.Where(a => a.Id != agent.Id && !a.Disabled && !a.Draining && labels.All(a.Labels.Contains)
@@ -206,7 +273,15 @@ public sealed class AgentUpdates(
     /// Asks for an agent's update as <paramref name="actor"/>: starts it, or queues it behind the one in flight. Refused, with a
     /// sentence, when the agent is current, cannot be updated from here, or is queued or updating already.
     /// </summary>
-    public async Task<Outcome> RequestAsync(Guid agentId, string actor, CancellationToken ct)
+    public Task<Outcome> RequestAsync(Guid agentId, string actor, CancellationToken ct) => AskAsync(agentId, actor, revert: false, ct);
+
+    /// <summary>
+    /// Asks for an agent's Revert as <paramref name="actor"/>: an update back to the version it ran before its last update, through
+    /// the same flow. Refused, with a sentence, when no such version is recorded or the agent is on it already.
+    /// </summary>
+    public Task<Outcome> RevertAsync(Guid agentId, string actor, CancellationToken ct) => AskAsync(agentId, actor, revert: true, ct);
+
+    private async Task<Outcome> AskAsync(Guid agentId, string actor, bool revert, CancellationToken ct)
     {
         var refused = await engine.ExecuteAsync(async (db, _) =>
         {
@@ -219,15 +294,16 @@ public sealed class AgentUpdates(
             var update = assessment.Update.State == "failed" ? assessment.Plain : assessment.Update;
             var why = update.State switch
             {
-                "current" => $"{agent.Name} already runs {agent.Version}.",
-                "unavailable" => update.Reason,
                 "queued" => $"{agent.Name}'s update is queued already.",
                 "updating" => $"{agent.Name} is being updated already.",
+                _ when revert => assessment.RevertRefused,
+                "current" => $"{agent.Name} already runs {agent.Version}.",
+                "unavailable" => update.Reason,
                 _ => null,
             };
             if (why is null)
             {
-                Queue(agent, actor, clock.GetUtcNow());
+                Queue(agent, actor, clock.GetUtcNow(), revert);
                 await db.SaveChangesAsync(ct);
             }
 
@@ -241,7 +317,10 @@ public sealed class AgentUpdates(
         return new(true, started is { } s && s.AgentId == agentId ? s.Refused : null);
     }
 
-    /// <summary>Asks for the update of every agent that is available or failed, in name order: the first starts, the rest queue.</summary>
+    /// <summary>
+    /// Asks for the update of every agent that is available, or whose update failed and that is still not current, in name
+    /// order: the first starts, the rest queue. Never a Revert.
+    /// </summary>
     public async Task RequestAllAsync(string actor, CancellationToken ct)
     {
         await engine.ExecuteAsync(async (db, _) =>
@@ -250,8 +329,9 @@ public sealed class AgentUpdates(
             var assessed = await AssessAsync(db, agents, await HeadAsync(db, ct), ct);
             var now = clock.GetUtcNow();
             var order = 0;
-            foreach (var agent in agents.Where(a => assessed[a.Id].Update.State is "available" or "failed"))
-                Queue(agent, actor, now.AddTicks(order++));
+            foreach (var agent in agents.Where(a => assessed[a.Id].Update.State == "available"
+                                                    || assessed[a.Id].Update.State == "failed" && assessed[a.Id].Plain.State == "available"))
+                Queue(agent, actor, now.AddTicks(order++), revert: false);
             await db.SaveChangesAsync(ct);
             return order;
         }, ct);
@@ -274,14 +354,16 @@ public sealed class AgentUpdates(
             return true;
         }, ct);
 
-    private static void Queue(AgentRecord agent, string actor, DateTimeOffset at)
+    private static void Queue(AgentRecord agent, string actor, DateTimeOffset at, bool revert)
     {
         Clear(agent);
         agent.UpdateState = AgentUpdateStates.Queued;
         agent.UpdateRequestedAt = at;
         agent.UpdateRequestedBy = actor;
+        agent.UpdateRevert = revert;
     }
 
+    /// <summary>Forgets the update asked for. The version from before the last update is kept: it is what Revert brings back.</summary>
     private static void Clear(AgentRecord agent)
     {
         agent.UpdateState = null;
@@ -289,8 +371,15 @@ public sealed class AgentUpdates(
         agent.UpdateRequestedBy = null;
         agent.UpdateTargetVersion = null;
         agent.UpdateChangeId = null;
-        agent.UpdateAppliedAt = null;
         agent.UpdateDetail = null;
+        agent.UpdateFailure = null;
+        agent.UpdateRevert = false;
+        agent.UpdateResourceId = null;
+        agent.UpdateHold = null;
+        agent.UpdateHoldAttemptId = null;
+        agent.UpdateReleasedAt = null;
+        agent.UpdateBaselineConnection = null;
+        agent.UpdatePreviousExecutors = null;
     }
 
     /// <summary>Lifts the pause the update set, never one a person set.</summary>
@@ -302,22 +391,41 @@ public sealed class AgentUpdates(
     }
 
     /// <summary>
-    /// Fails the update in flight with <paramref name="why"/>, lifts its pause and empties the queue. The caller's save also adds
-    /// the notification that tells it.
+    /// Fails the update in flight with <paramref name="failure"/> and <paramref name="why"/>, lifts its pause and empties the
+    /// queue of updates; a queued Revert stays, as it is the way back. The caller's save also adds the notification that tells it.
     /// </summary>
-    private async Task FailAsync(OctopushyDb db, AgentRecord agent, string why, CancellationToken ct)
+    private async Task FailAsync(OctopushyDb db, AgentRecord agent, string failure, string why, CancellationToken ct)
     {
+        logger.LogWarning("The update of agent {Name} failed ({Failure}): {Why}", agent.Name, failure, why);
         agent.UpdateState = AgentUpdateStates.Failed;
+        agent.UpdateFailure = failure;
         agent.UpdateDetail = why;
+        // Nothing is held for it any more: dispatch holds only for an update in flight.
+        agent.UpdateResourceId = null;
+        agent.UpdateHold = null;
+        agent.UpdateHoldAttemptId = null;
         Notifications.NotificationHub.AgentUpdateFailed(db, agent, clock.GetUtcNow());
         Unpause(agent);
-        foreach (var queued in await db.Agents.Where(a => a.UpdateState == AgentUpdateStates.Queued).ToListAsync(ct))
+        foreach (var queued in await db.Agents.Where(a => a.UpdateState == AgentUpdateStates.Queued && !a.UpdateRevert).ToListAsync(ct))
             Clear(queued);
     }
 
+    /// <summary>The version an update in flight sets: the server's, or for a Revert the one recorded before.</summary>
+    private static string TargetOf(AgentRecord agent) => agent.UpdateTargetVersion ?? TargetVersion;
+
     /// <summary>
-    /// Moves updates on: settles the one in flight from its agent's version and its change, then starts the next queued one.
-    /// Called by the orchestrator's loop and when an agent connects.
+    /// The agent's connection when it runs the version its update sets: the server's or newer, or for a Revert that version
+    /// exactly. As the connection's own Hello said, so a connection the restart left behind is never taken for the new one.
+    /// </summary>
+    private AgentSession? Back(AgentRecord agent) =>
+        connections.Get(agent.Id) is { Version: { } version } session
+        && (agent.UpdateRevert ? SameVersion(version, TargetOf(agent)) : AtLeast(version, TargetOf(agent)))
+            ? session
+            : null;
+
+    /// <summary>
+    /// Moves updates on: settles the one in flight from its agent's connection, its change and its deadline, then starts the next
+    /// queued one. Called by the orchestrator's loop and when an agent connects. Writes only when the update moves.
     /// </summary>
     public async Task AdvanceAsync(CancellationToken ct)
     {
@@ -329,17 +437,8 @@ public sealed class AgentUpdates(
             if (agent.UpdateChangeId is null && !committing.ContainsKey(agent.Id))
             {
                 // Claimed by a server that stopped before it recorded the change: nothing else would ever end it.
-                logger.LogWarning("The update of agent {Name} was left without its change; it is failed.", agent.Name);
-                await FailAsync(db, agent, "The server stopped before the update's change was recorded. Look for its commit in the lab repository, then ask again.", ct);
-                await db.SaveChangesAsync(ct);
-                return null;
-            }
-
-            if (AtLeast(agent.Version, agent.UpdateTargetVersion ?? TargetVersion))
-            {
-                logger.LogInformation("Agent {Name} is back on {Version}; its update is done.", agent.Name, agent.Version);
-                Clear(agent);
-                Unpause(agent);
+                await FailAsync(db, agent, AgentUpdateFailures.ChangeNotRecorded,
+                    "The server stopped before the update's change was recorded. Look for its commit in the lab repository, then ask again.", ct);
                 await db.SaveChangesAsync(ct);
                 return null;
             }
@@ -355,13 +454,24 @@ public sealed class AgentUpdates(
                 var agent = await db.Agents.FirstOrDefaultAsync(a => a.UpdateState == AgentUpdateStates.Updating && a.UpdateChangeId == changeId, ct);
                 if (agent is null)
                     return 0;
-                if (Failure(change, agent, clock.GetUtcNow()) is { } why)
+                if (await DoneAsync(db, change, agent, ct) is { } session)
                 {
-                    logger.LogWarning("The update of agent {Name} failed: {Why}", agent.Name, why);
-                    await FailAsync(db, agent, why, ct);
+                    // A new process must offer everything the old one did; gaining is fine.
+                    var newProcess = session.Id != agent.UpdateBaselineConnection;
+                    var lost = newProcess ? (agent.UpdatePreviousExecutors ?? []).Except(session.HelloExecutors).Order().ToList() : [];
+                    if (lost.Count > 0)
+                        await FailAsync(db, agent, AgentUpdateFailures.LostExecutors, LostSentence(agent, session, lost), ct);
+                    else
+                    {
+                        logger.LogInformation("Agent {Name} is back on {Version}; its update is done.", agent.Name, session.Version);
+                        Clear(agent);
+                        Unpause(agent);
+                    }
                 }
-
-                await db.SaveChangesAsync(ct);
+                else if (Failure(change, agent, clock.GetUtcNow()) is { } failure)
+                    await FailAsync(db, agent, failure.Code, failure.Why, ct);
+                if (db.ChangeTracker.HasChanges())
+                    await db.SaveChangesAsync(ct);
                 return 0;
             }, ct);
         }
@@ -369,37 +479,77 @@ public sealed class AgentUpdates(
         await StartNextAsync(ct);
     }
 
-    /// <summary>Why an update in flight failed, or null while it may still succeed. Records when its change was applied.</summary>
-    private static string? Failure(ChangeDto? change, AgentRecord agent, DateTimeOffset now)
+    /// <summary>
+    /// The agent's connection when its update is done: its change applied, every run of it ended, nothing left that may restart
+    /// the agent (no change to its guest queued, assigned or running), and its connection reports the target. Null otherwise.
+    /// </summary>
+    private async Task<AgentSession?> DoneAsync(OctopushyDb db, ChangeDto? change, AgentRecord agent, CancellationToken ct)
     {
-        if (change is null)
-            return "The change that carried the update is gone.";
-        if (change.Runs.FirstOrDefault(r => r.Status == RunStatuses.Uncertain) is { } uncertain)
-            return $"Run #{uncertain.Number} ended uncertain: look at {agent.Name}'s guest, then close the run and ask again.";
-        switch (change.Status)
-        {
-            case ChangeStatuses.Applied:
-                agent.UpdateAppliedAt ??= now;
-                return now - agent.UpdateAppliedAt >= ComeBackWithin
-                    ? $"Its setup succeeded, and {agent.Name} did not come back on {agent.UpdateTargetVersion} within {(int)ComeBackWithin.TotalMinutes} minutes. "
-                      + "Check the agent on its guest."
-                    : null;
-            case ChangeStatuses.Failed:
-                return $"The change failed: {change.Detail}";
-            case ChangeStatuses.Refused or ChangeStatuses.Dismissed:
-                return $"The change was {change.Status}: {change.Detail}";
-            case ChangeStatuses.Superseded:
-                return $"Another commit changed the guest first. {change.Detail}";
-            case ChangeStatuses.NoChange:
-                return $"The change proposed no run, so nothing rolled the new version out. {change.Detail}";
-            default:
-                return null;
-        }
+        if (change is not { Status: ChangeStatuses.Applied } || !change.Runs.All(r => RunStatuses.IsTerminal(r.Status)) || Back(agent) is not { } session)
+            return null;
+        var guest = agent.UpdateResourceId;
+        var pending = await db.Attempts.AnyAsync(a => a.Mutating && a.Step!.Run!.ResourceId == guest
+            && (a.Status == AttemptStatuses.Queued || a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running), ct);
+        return pending ? null : session;
+    }
+
+    private static string LostSentence(AgentRecord agent, AgentSession session, IReadOnlyList<string> lost)
+    {
+        var each = lost.Select(e => session.HelloUnavailable.TryGetValue(e, out var reason) ? $"{e} ({reason})" : e);
+        var back = agent.UpdateRevert || agent.UpdatePreviousVersion is not { } previous ? "" : $" Revert brings back {previous}.";
+        return $"{agent.Name} is back on {session.Version} and no longer offers {string.Join(", ", each)}, which it did before. "
+               + $"Nothing was rolled back.{back}";
     }
 
     /// <summary>
-    /// Starts the earliest queued update when none is in flight: pauses its agent, commits the change and records it. Returns the
-    /// agent started and, when its change was refused, why.
+    /// Why an update in flight failed, or null while it may still succeed. A run of its change that waits for approval or is
+    /// blocked waits as long as it takes; the deadline runs only from the release of a step that may restart the agent.
+    /// </summary>
+    private (string Code, string Why)? Failure(ChangeDto? change, AgentRecord agent, DateTimeOffset now)
+    {
+        if (change is null)
+            return (AgentUpdateFailures.ChangeGone, "The change that carried the update is gone.");
+        if (change.Runs.FirstOrDefault(r => r.Status == RunStatuses.Uncertain) is { } uncertain)
+            return (AgentUpdateFailures.RunUncertain, $"Run #{uncertain.Number} ended uncertain: look at {agent.Name}'s guest, then close the run and ask again.");
+        var target = TargetOf(agent);
+        var previous = agent.UpdateRevert || agent.UpdatePreviousVersion is null ? "" : $" Revert brings back {agent.UpdatePreviousVersion}.";
+        // Connected again since the restart was released, on another version: the change did not bring the target.
+        var otherVersion = agent.UpdateReleasedAt is not null && Back(agent) is null
+                           && connections.Get(agent.Id) is { Version: not null } session && session.Id != agent.UpdateBaselineConnection
+            ? (AgentUpdateFailures.OtherVersion,
+                $"{agent.Name} connected again on {session.Version}, not {target}. Check the image its guest's setup deployed.{previous}")
+            : ((string, string)?)null;
+        switch (change.Status)
+        {
+            case ChangeStatuses.Applied:
+                // Every step that may restart the agent is released through dispatch; one applied otherwise starts the clock now.
+                agent.UpdateReleasedAt ??= now;
+                if (otherVersion is not null)
+                    return otherVersion;
+                break;
+            case ChangeStatuses.Failed:
+                return (AgentUpdateFailures.ChangeFailed, $"The change failed: {change.Detail}");
+            case ChangeStatuses.Refused or ChangeStatuses.Dismissed:
+                return (AgentUpdateFailures.ChangeRefused, $"The change was {change.Status}: {change.Detail}");
+            case ChangeStatuses.Superseded:
+                return (AgentUpdateFailures.Superseded, $"Another commit changed the guest first. {change.Detail}");
+            case ChangeStatuses.NoChange:
+                return (AgentUpdateFailures.NoRun, $"The change proposed no run, so nothing rolled the new version out. {change.Detail}");
+        }
+
+        // Never while a run of the change still works: failing would lift the pause while its setup may still restart the
+        // agent. A run that loses its agent ends uncertain, which fails the update above.
+        if (PhaseOf(agent, change.Runs.Select(r => r.Status)) == AgentUpdatePhases.Restarting && now - agent.UpdateReleasedAt >= ComeBackWithin
+            && change.Runs.All(r => RunStatuses.IsTerminal(r.Status)))
+            return otherVersion ?? (AgentUpdateFailures.DidNotComeBack,
+                $"{agent.Name} did not connect again on {target} within {(int)ComeBackWithin.TotalMinutes} minutes of the step that restarts it. "
+                + $"Check the agent on its guest.{previous}");
+        return null;
+    }
+
+    /// <summary>
+    /// Starts the earliest queued update when none is in flight: records the version and executors the agent has now, pauses it,
+    /// commits the change and records it. Returns the agent started and, when its change was refused, why.
     /// </summary>
     private async Task<(Guid AgentId, string? Refused)?> StartNextAsync(CancellationToken ct)
     {
@@ -414,19 +564,42 @@ public sealed class AgentUpdates(
             var assessment = (await AssessAsync(db, agents, await HeadAsync(db, ct), ct))[next.Id];
             // Claimed before the commit, so nothing else starts meanwhile.
             next.UpdateState = AgentUpdateStates.Updating;
-            next.UpdateTargetVersion = TargetVersion;
-            if (assessment.Plain.State != "available" || assessment.Guest is null)
+            string? why;
+            if (next.UpdateRevert)
             {
-                // It became current, or cannot be updated from here, while it waited.
-                var why = assessment.Plain.State == "current" ? null : assessment.Plain.Reason ?? "It cannot be updated from here now.";
-                if (why is null)
-                    Clear(next);
-                else
-                    await FailAsync(db, next, why, ct);
-                await db.SaveChangesAsync(ct);
-                return new { next.Id, Resource = (Guid?)null, Actor = "", Refused = why };
+                next.UpdateTargetVersion = next.UpdatePreviousVersion;
+                // Back on it already, and declared: nothing to do.
+                why = SameVersion(next.Version, next.UpdatePreviousVersion) && SameVersion(assessment.Guest?.DeclaredVersion, next.UpdatePreviousVersion)
+                    ? ""
+                    : assessment.RevertRefused;
+            }
+            else
+            {
+                next.UpdateTargetVersion = TargetVersion;
+                why = assessment.Plain.State == "available" && assessment.Guest is not null ? null
+                    : assessment.Plain.State == "current" ? "" : assessment.Plain.Reason ?? "It cannot be updated from here now.";
             }
 
+            if (why is not null)
+            {
+                // It became current, or cannot be updated from here, while it waited.
+                if (why.Length == 0)
+                    Clear(next);
+                else
+                    await FailAsync(db, next, AgentUpdateFailures.Unavailable, why, ct);
+                await db.SaveChangesAsync(ct);
+                return new { next.Id, Resource = (Guid?)null, Actor = "", Version = "", Refused = why.Length == 0 ? null : why };
+            }
+
+            // What it runs and offers now, as its own connection said: Revert brings the version back, and the new one must
+            // offer every executor.
+            // The guest, before the commit: dispatch holds changes to it from now on, not only once the change is recorded.
+            next.UpdateResourceId = assessment.Guest!.ResourceId;
+            var session = connections.Get(next.Id);
+            next.UpdateBaselineConnection = session?.Id;
+            if (!next.UpdateRevert)
+                next.UpdatePreviousVersion = session?.Version ?? next.Version;
+            next.UpdatePreviousExecutors = [.. (session?.Executors ?? next.Executors).Order(StringComparer.Ordinal)];
             if (!next.Draining)
             {
                 next.Draining = true;
@@ -444,7 +617,8 @@ public sealed class AgentUpdates(
                 throw;
             }
 
-            return new { next.Id, Resource = (Guid?)assessment.Guest.ResourceId, Actor = next.UpdateRequestedBy ?? "octopushy", Refused = (string?)null };
+            return new { next.Id, Resource = (Guid?)assessment.Guest!.ResourceId, Actor = next.UpdateRequestedBy ?? "octopushy",
+                Version = next.UpdateTargetVersion!, Refused = (string?)null };
         }, ct);
         if (claimed is null)
             return null;
@@ -459,7 +633,7 @@ public sealed class AgentUpdates(
         {
             try
             {
-                (change, refused) = await CommitAsync(resourceId, claimed.Actor, CancellationToken.None);
+                (change, refused) = await CommitAsync(resourceId, claimed.Actor, claimed.Version, CancellationToken.None);
             }
             catch (Exception e)
             {
@@ -473,10 +647,10 @@ public sealed class AgentUpdates(
                 if (change is not null)
                 {
                     agent.UpdateChangeId = change.Id;
-                    logger.LogInformation("Agent {Name} is being updated to {Version} by change {Change}.", agent.Name, TargetVersion, change.Id);
+                    logger.LogInformation("Agent {Name} is being updated to {Version} by change {Change}.", agent.Name, claimed.Version, change.Id);
                 }
                 else
-                    await FailAsync(db, agent, refused!, CancellationToken.None);
+                    await FailAsync(db, agent, AgentUpdateFailures.CommitRefused, refused!, CancellationToken.None);
                 await db.SaveChangesAsync(CancellationToken.None);
                 return 0;
             }, CancellationToken.None);
@@ -491,10 +665,10 @@ public sealed class AgentUpdates(
     }
 
     /// <summary>
-    /// Commits the guest's definition with the version set to the server's and the digest dropped, every other input kept, as
-    /// <paramref name="actor"/>. Returns the change, or why it was refused.
+    /// Commits the guest's definition with the version set to <paramref name="version"/> and the digest dropped, every other input
+    /// kept, as <paramref name="actor"/>. Returns the change, or why it was refused.
     /// </summary>
-    private async Task<(ChangeDto? Change, string? Refused)> CommitAsync(Guid resourceId, string actor, CancellationToken ct)
+    private async Task<(ChangeDto? Change, string? Refused)> CommitAsync(Guid resourceId, string actor, string version, CancellationToken ct)
     {
         ChangeFormDto? form;
         await using (var scope = scopes.CreateAsyncScope())
@@ -506,7 +680,7 @@ public sealed class AgentUpdates(
         if (form.Inputs is not JsonObject current || form.BaseCommit is null)
             return (null, "The guest's definition has no inputs to set the version in.");
         var inputs = current.DeepClone().AsObject();
-        inputs[VersionInput] = TargetVersion;
+        inputs[VersionInput] = version;
         inputs.Remove(DigestInput);
         var (change, refusal) = await changes.CommitAsync(new ChangeRequest(resourceId, form.BaseCommit, ChangeKinds.Edit, Inputs: inputs), actor, ct);
         return (change, refusal?.Message);

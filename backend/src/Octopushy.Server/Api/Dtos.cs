@@ -628,9 +628,16 @@ public sealed record AgentGuest(Guid ResourceId, string Address, string? Declare
 /// Whether an agent can be updated to the server's version from here, and where an update stands: <c>current</c>,
 /// <c>available</c>, <c>unavailable</c>, <c>queued</c>, <c>updating</c> or <c>failed</c>. <c>Reason</c> says why it is
 /// unavailable or why it failed. <c>ChangeId</c> and <c>RunId</c> are the change carrying the update and its latest run.
-/// See docs/worker-routing.md.
+/// <c>Phase</c> is where an update in flight stands (<see cref="AgentUpdatePhases"/>), <c>Failure</c> why one failed
+/// (<see cref="AgentUpdateFailures"/>). <c>PreviousVersion</c> is the version the agent ran before its last update, and
+/// <c>CanRevert</c> whether Revert brings it back now. <c>Revert</c> says the update asked for is one, with
+/// <c>TargetVersion</c> the version it brings back. <c>DeadlineAt</c> is when an update whose agent is restarting fails if the
+/// agent is not back. <c>WaitingForAttemptId</c> and <c>WaitingForRunId</c> are the attempt on the agent, and its run, that
+/// a phase of waiting (<c>waiting-for-idle</c>, <c>waiting-for-unconfirmed-change</c>) waits for. See docs/worker-routing.md.
 /// </summary>
-public sealed record AgentUpdateState(string State, string? TargetVersion, string? Reason, Guid? ChangeId, Guid? RunId);
+public sealed record AgentUpdateState(string State, string? TargetVersion, string? Reason, Guid? ChangeId, Guid? RunId,
+    string? Phase = null, string? Failure = null, string? PreviousVersion = null, bool CanRevert = false, bool Revert = false,
+    DateTimeOffset? DeadlineAt = null, Guid? WaitingForAttemptId = null, Guid? WaitingForRunId = null);
 
 public sealed record AgentUpdate(IReadOnlyList<string>? Labels, int? MaxConcurrency, bool? Disabled, bool? Draining = null);
 

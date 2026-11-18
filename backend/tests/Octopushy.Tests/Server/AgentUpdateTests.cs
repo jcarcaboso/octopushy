@@ -70,17 +70,22 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
 
         public Task<AgentRecord> RecordAsync(Guid id) => Server.QueryAsync(db => db.Agents.AsNoTracking().SingleAsync(a => a.Id == id));
 
-        /// <summary>The agent says hello again, reporting <paramref name="version"/>.</summary>
-        public async Task ReportVersionAsync(Guid id, string version)
+        /// <summary>The agent connects again, reporting <paramref name="version"/>, and updates are moved on as a connection does.</summary>
+        public async Task<FakeAgent> ReportVersionAsync(FakeAgent agent, string version, string[]? executors = null,
+            IReadOnlyDictionary<string, string>? unavailable = null, params string[] running)
         {
-            await Server.WithDbAsync(async db =>
-            {
-                await db.Agents.Where(a => a.Id == id).ExecuteUpdateAsync(u => u.SetProperty(a => a.Version, version));
-            });
+            var back = await Server.ReconnectAsync(agent, version, executors, unavailable, running);
             await Updates.AdvanceAsync(CancellationToken.None);
+            return back;
         }
 
         public Task<HttpResponseMessage> RequestAsync(Guid id) => Client.PostAsync($"/api/agents/{id}/update", null);
+
+        public Task<HttpResponseMessage> RevertAsync(Guid id) => Client.PostAsync($"/api/agents/{id}/revert", null);
+
+        /// <summary>How many times the agent's update was told failed.</summary>
+        public Task<int> FailuresToldAsync(Guid id) =>
+            Server.QueryAsync(db => db.Notifications.CountAsync(n => n.AgentId == id && n.Kind == NotificationKinds.AgentUpdateFailed));
 
         public async ValueTask DisposeAsync()
         {
@@ -94,12 +99,13 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
     /// The server with publishing on, reading a bare remote cloned from the lab, synced and trusted, with an operator's client
     /// and the store values the guest's setup names.
     /// </summary>
-    private async Task<Setup> StartAsync(TestRepository lab, bool publish = true, TimeProvider? clock = null)
+    private async Task<Setup> StartAsync(TestRepository lab, bool publish = true, TimeProvider? clock = null,
+        Action<IServiceCollection>? services = null)
     {
         var settings = new Dictionary<string, string>();
         if (publish)
             settings["Octopushy:RepositoryEditor:PublishEnabled"] = "true";
-        var server = await ServerHarness.StartAsync(postgres, lab, settings: settings, clock: clock);
+        var server = await ServerHarness.StartAsync(postgres, lab, settings: settings, clock: clock, services: services);
         var remote = new TestRepository();
         await server.Services.GetRequiredService<GitCli>().RunAsync(["clone", "--bare", "--quiet", server.Repository.Root, remote.Root]);
         await server.WithDbAsync(async db =>
@@ -236,7 +242,7 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
         await WorkerRoutingTests.OfflineSpareAsync(setup.Server);
         await ProvisionAsync(setup, runner);
         var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
-        await setup.ReportVersionAsync(worker.Id, "0.0.1");
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
         var resource = await setup.Server.ResourceAsync(Guest);
 
         var listed = await setup.AgentAsync(worker.Id);
@@ -322,7 +328,7 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
         Assert.Equal(change.Runs[^1].Id, listed["update"]!["runId"]!.GetValue<Guid>());
         Assert.True((await setup.RecordAsync(worker.Id)).Draining);
 
-        await setup.ReportVersionAsync(worker.Id, Target);
+        worker = await setup.ReportVersionAsync(worker, Target);
         listed = await setup.AgentAsync(worker.Id);
         Assert.Equal("current", listed["update"]!["state"]!.GetValue<string>());
         Assert.Null(listed["update"]!["changeId"]);
@@ -343,7 +349,7 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
         var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
         await ProvisionAsync(setup, runner);
         var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
-        await setup.ReportVersionAsync(worker.Id, "0.0.1");
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
         (await setup.Client.PatchAsJsonAsync($"/api/agents/{worker.Id}", new { draining = true })).EnsureSuccessStatusCode();
         Assert.Equal("available", await setup.StateAsync(worker.Id));
 
@@ -355,13 +361,33 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
         Assert.Equal("ops", provision.Steps.Single(s => s.Name == StepNames.Approval).DecidedBy);
         Assert.Equal(RunStatuses.Succeeded, (await setup.Server.LatestRunAsync(Guest, Operations.Configure)).Status);
         await setup.Updates.AdvanceAsync(CancellationToken.None);
-        Assert.Equal("updating", await setup.StateAsync(worker.Id));
+        // The setup that restarts it was handed out: the deadline runs from then, and the agent is not told offline meanwhile.
+        var record = await setup.RecordAsync(worker.Id);
+        Assert.NotNull(record.UpdateReleasedAt);
+        var update = (await setup.AgentAsync(worker.Id))["update"]!;
+        Assert.Equal("updating", update["state"]!.GetValue<string>());
+        Assert.Equal(AgentUpdatePhases.Restarting, update["phase"]!.GetValue<string>());
+        Assert.Equal(record.UpdateReleasedAt!.Value.AddMinutes(30), update["deadlineAt"]!.GetValue<DateTimeOffset>());
 
-        clock.Now = DateTimeOffset.UtcNow + AgentUpdates.ComeBackWithin + TimeSpan.FromMinutes(1);
+        // Just before the deadline it still waits, away as its restart leaves it and not told offline; after it, it fails.
+        setup.Server.Services.GetRequiredService<AgentConnections>().Disconnect(worker.Id);
+        var presence = setup.Server.Services.GetRequiredService<AgentPresence>();
+        Task<int> OfflineToldAsync() => setup.Server.QueryAsync(db => db.Notifications.CountAsync(n => n.AgentId == worker.Id && n.Kind == NotificationKinds.AgentOffline));
+        clock.Now = record.UpdateReleasedAt.Value.AddMinutes(29);
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+        await presence.CheckAsync(CancellationToken.None);
+        Assert.Equal("updating", await setup.StateAsync(worker.Id));
+        Assert.Equal(0, await OfflineToldAsync());
+        clock.Now = record.UpdateReleasedAt.Value.AddMinutes(31);
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
         await setup.Updates.AdvanceAsync(CancellationToken.None);
         var listed = await setup.AgentAsync(worker.Id);
         Assert.Equal("failed", listed["update"]!["state"]!.GetValue<string>());
-        Assert.Contains("did not come back", listed["update"]!["reason"]!.GetValue<string>());
+        Assert.Equal(AgentUpdateFailures.DidNotComeBack, listed["update"]!["failure"]!.GetValue<string>());
+        Assert.Contains("did not connect again", listed["update"]!["reason"]!.GetValue<string>());
+        Assert.Equal(1, await setup.FailuresToldAsync(worker.Id));
+        await presence.CheckAsync(CancellationToken.None);
+        Assert.Equal(1, await OfflineToldAsync());
         Assert.NotNull(listed["update"]!["changeId"]);
         Assert.True((await setup.RecordAsync(worker.Id)).Draining);
 
@@ -371,19 +397,20 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
         Assert.Contains("has not rolled it out yet", await again.Content.ReadAsStringAsync());
 
         // Back on the target after all: current, and still paused, as the operator left it.
-        await setup.ReportVersionAsync(worker.Id, Target);
+        worker = await setup.ReportVersionAsync(worker, Target);
         Assert.Equal("current", await setup.StateAsync(worker.Id));
         Assert.True((await setup.RecordAsync(worker.Id)).Draining);
     }
 
     [Fact]
-    public async Task An_update_does_not_approve_a_destructive_setup()
+    public async Task An_update_does_not_approve_a_destructive_setup_and_waits_for_a_person_without_a_deadline()
     {
-        await using var setup = await StartAsync(Lab(policy: "policy: { approval: manual, destructive: automatic }", destructive: "true"));
+        var clock = new TestClock();
+        await using var setup = await StartAsync(Lab(policy: "policy: { approval: manual, destructive: automatic }", destructive: "true"), clock: clock);
         var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
         await ProvisionAsync(setup, runner);
         var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
-        await setup.ReportVersionAsync(worker.Id, "0.0.1");
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
 
         Assert.Equal(HttpStatusCode.NoContent, (await setup.RequestAsync(worker.Id)).StatusCode);
         var done = await WorkAsync(setup, runner);
@@ -394,7 +421,18 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
         var approval = configure.Steps.Single(s => s.Name == StepNames.Approval);
         Assert.Equal(StepStatuses.AwaitingApproval, approval.Status);
         Assert.Null(approval.DecidedBy);
-        Assert.Equal("updating", await setup.StateAsync(worker.Id));
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+        var update = (await setup.AgentAsync(worker.Id))["update"]!;
+        Assert.Equal("updating", update["state"]!.GetValue<string>());
+        Assert.Equal(AgentUpdatePhases.AwaitingApproval, update["phase"]!.GetValue<string>());
+        Assert.Null(update["deadlineAt"]);
+
+        // A day later it still waits for the person, and fails nothing.
+        clock.Now = DateTimeOffset.UtcNow.AddDays(1);
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+        // Read from the record: a day later the operator's session has expired.
+        Assert.Equal(AgentUpdateStates.Updating, (await setup.RecordAsync(worker.Id)).UpdateState);
+        Assert.Equal(0, await setup.FailuresToldAsync(worker.Id));
     }
 
     [Fact]
@@ -402,7 +440,7 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
     {
         await using var setup = await StartAsync(Lab());
         var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
-        await setup.ReportVersionAsync(worker.Id, "0.0.1");
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
         // As a server leaves it when it stops between claiming the update and recording its change.
         await setup.Server.WithDbAsync(async db =>
         {
@@ -427,13 +465,14 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
         var lab = Lab(second: true, policy: "");
         lab.Write(ThirdFile, File.ReadAllText(Path.Combine(lab.Root, SecondFile)).Replace("vmid: 311", "vmid: 312").Replace("10.1.0.32", "10.1.0.33"));
         await using var setup = await StartAsync(lab);
-        await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
-        var first = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
-        var second = await setup.Server.ConnectAgentFromAsync(SecondAddress, "krb-app-02", "home");
-        var third = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.1.0.33"), "krb-app-03", "home");
-        await setup.ReportVersionAsync(first.Id, "0.0.1");
-        await setup.ReportVersionAsync(second.Id, "0.0.1");
-        await setup.ReportVersionAsync(third.Id, "0.0.1");
+        var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
+        // The workers take none of the lab's work: the runner does it all, and the test answers it.
+        var first = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "elsewhere");
+        var second = await setup.Server.ConnectAgentFromAsync(SecondAddress, "krb-app-02", "elsewhere");
+        var third = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.1.0.33"), "krb-app-03", "elsewhere");
+        first = await setup.ReportVersionAsync(first, "0.0.1");
+        second = await setup.ReportVersionAsync(second, "0.0.1");
+        third = await setup.ReportVersionAsync(third, "0.0.1");
         Assert.Equal("available", await setup.StateAsync(second.Id));
 
         Assert.Equal(HttpStatusCode.NoContent, (await setup.RequestAsync(first.Id)).StatusCode);
@@ -449,8 +488,9 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
         Assert.Equal(HttpStatusCode.NoContent, (await setup.RequestAsync(second.Id)).StatusCode);
         Assert.Equal("queued", await setup.StateAsync(second.Id));
 
-        // The first is back: the second starts.
-        await setup.ReportVersionAsync(first.Id, Target);
+        // The first's change is rolled out and it is back: the second starts.
+        Assert.Contains("ansible:run", await WorkAsync(setup, runner));
+        first = await setup.ReportVersionAsync(first, Target);
         Assert.Equal("current", await setup.StateAsync(first.Id));
         Assert.Equal("updating", await setup.StateAsync(second.Id));
         Assert.True((await setup.RecordAsync(second.Id)).Draining);
@@ -481,9 +521,9 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
     {
         await using var setup = await StartAsync(Lab(), publish: false);
         var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
-        await setup.ReportVersionAsync(worker.Id, "0.0.1");
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
         var elsewhere = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "internal", "home");
-        await setup.ReportVersionAsync(elsewhere.Id, "0.0.1");
+        elsewhere = await setup.ReportVersionAsync(elsewhere, "0.0.1");
 
         // No guest names it: the internal agent is updated with the server.
         var listed = await setup.AgentAsync(elsewhere.Id);
@@ -516,6 +556,431 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
 
         // Taking back an update that was never asked for is nothing.
         Assert.Equal(HttpStatusCode.NoContent, (await setup.Client.DeleteAsync($"/api/agents/{elsewhere.Id}/update")).StatusCode);
+    }
+
+    /// <summary>The guest provisioned by a runner, its worker on 0.0.1 asked to update, and its setup rolled out by the runner.</summary>
+    private static async Task<(FakeAgent Runner, FakeAgent Worker)> RolledOutAsync(Setup setup)
+    {
+        var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
+        await ProvisionAsync(setup, runner);
+        var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
+        Assert.Equal(HttpStatusCode.NoContent, (await setup.RequestAsync(worker.Id)).StatusCode);
+        await WorkAsync(setup, runner);
+        Assert.Equal(RunStatuses.Succeeded, (await setup.Server.LatestRunAsync(Guest, Operations.Configure)).Status);
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+        Assert.Equal("updating", await setup.StateAsync(worker.Id));
+        return (runner, worker);
+    }
+
+    /// <summary>
+    /// Two worker guests and the worker krb-app-01, on 0.0.1, alone at first: it provisions both and is handed krb-app-02's
+    /// setup, which it keeps running, a change. A runner then sets up krb-app-01, which the worker never does itself.
+    /// </summary>
+    private static async Task<(FakeAgent Worker, FakeAgent Runner, Assignment Held)> BusyWorkerAsync(Setup setup)
+    {
+        var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
+        Assignment? held = null;
+        await WorkAsync(setup, worker, stop: a =>
+        {
+            if (a is not { Executor: "ansible", Action: "run" })
+                return false;
+            held = a;
+            return true;
+        });
+        Assert.NotNull(held);
+        Assert.True(held.Mutating);
+        await setup.Server.Engine.OnStartedAsync(worker.Id, Guid.Parse(held.AttemptId), CancellationToken.None);
+        var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
+        await WorkAsync(setup, runner);
+        Assert.Equal(RunStatuses.Succeeded, (await setup.Server.LatestRunAsync(Guest, Operations.Configure)).Status);
+        return (worker, runner, held);
+    }
+
+    private static async Task<Attempt> PlaybookAsync(Setup setup) =>
+        (await setup.Server.LatestRunAsync(Guest, Operations.Configure)).Steps.Single(s => s.Name == StepNames.Playbook).Attempts.Single();
+
+    [Fact]
+    public async Task An_update_waits_for_a_change_whose_lease_ran_out_until_the_agent_says_it_stopped()
+    {
+        var clock = new TestClock();
+        await using var setup = await StartAsync(Lab(second: true, policy: ""), clock: clock);
+        var (worker, runner, held) = await BusyWorkerAsync(setup);
+        // The worker's channel is lost and the change's lease runs out: uncertain, and it may still run on the worker.
+        setup.Server.Services.GetRequiredService<AgentConnections>().Disconnect(worker.Id);
+        clock.Now = DateTimeOffset.UtcNow.AddMinutes(2);
+        await setup.Server.TickAsync();
+        var heldId = Guid.Parse(held.AttemptId);
+        var attempt = await setup.Server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == heldId));
+        Assert.Equal(AttemptStatuses.Uncertain, attempt.Status);
+        // It connects again, saying it still runs it.
+        clock.Now = clock.Now.Value.AddSeconds(5);
+        worker = await setup.ReportVersionAsync(worker, "0.0.1", null, null, held.AttemptId);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await setup.RequestAsync(worker.Id)).StatusCode);
+        await WorkAsync(setup, runner);
+
+        // The playbook that restarts it waits, and says for what.
+        var playbook = await PlaybookAsync(setup);
+        Assert.Equal(AttemptStatuses.Queued, playbook.Status);
+        Assert.Contains("lease ran out", playbook.WaitingReason);
+        var update = (await setup.AgentAsync(worker.Id))["update"]!;
+        Assert.Equal(AgentUpdatePhases.WaitingForUnconfirmedChange, update["phase"]!.GetValue<string>());
+        Assert.Equal(heldId, update["waitingForAttemptId"]!.GetValue<Guid>());
+        Assert.Equal(attempt.RunId, update["waitingForRunId"]!.GetValue<Guid>());
+        Assert.Equal(AgentUpdateHolds.UnconfirmedChange, (await setup.RecordAsync(worker.Id)).UpdateHold);
+
+        // A heartbeat that no longer lists it: it stopped, and the playbook goes.
+        clock.Now = clock.Now.Value.AddSeconds(5);
+        worker.Session.ReportRunning([], clock.GetUtcNow());
+        await setup.Server.TickAsync();
+        Assert.Contains(runner.TakeAssignments(), a => a is { Executor: "ansible", Action: "run" });
+        var record = await setup.RecordAsync(worker.Id);
+        Assert.Null(record.UpdateHold);
+        Assert.NotNull(record.UpdateReleasedAt);
+    }
+
+    [Fact]
+    public async Task An_update_holds_changes_to_its_guest_from_its_claim_while_its_commit_is_pushed()
+    {
+        await using var setup = await StartAsync(Lab(second: true, policy: ""));
+        var (worker, runner, held) = await BusyWorkerAsync(setup);
+        var resource = await setup.Server.ResourceAsync(Guest);
+        // The remote takes the update's push only once the test lets it, as a slow Git host would: outside the engine's lock.
+        var received = Path.Combine(setup.Remote.Root, "push-received");
+        var release = Path.Combine(setup.Remote.Root, "push-release");
+        var hook = Path.Combine(setup.Remote.Root, "hooks", "pre-receive");
+        File.WriteAllText(hook, $"#!/bin/sh\ncat >/dev/null\ntouch '{received}'\nwhile [ ! -e '{release}' ]; do sleep 0.1; done\n");
+        File.SetUnixFileMode(hook, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var request = setup.RequestAsync(worker.Id);
+        try
+        {
+            for (var i = 0; i < 300 && !File.Exists(received); i++)
+                await Task.Delay(100);
+            Assert.True(File.Exists(received), "The update's push never reached the remote.");
+
+            // Claimed, with its guest reserved, and no change recorded yet.
+            var record = await setup.RecordAsync(worker.Id);
+            Assert.Equal(AgentUpdateStates.Updating, record.UpdateState);
+            Assert.Equal(resource.Id, record.UpdateResourceId);
+            Assert.Null(record.UpdateChangeId);
+
+            // A setup of the guest asked for meanwhile waits for the worker's change.
+            (await setup.Client.PostAsJsonAsync($"/api/guests/{resource.Id}/configure", new { action = "setup" })).EnsureSuccessStatusCode();
+            var done = await WorkAsync(setup, runner);
+            Assert.DoesNotContain("ansible:run", done);
+            var playbook = await PlaybookAsync(setup);
+            Assert.Equal(AttemptStatuses.Queued, playbook.Status);
+            Assert.Contains("to finish run of run #", playbook.WaitingReason);
+        }
+        finally
+        {
+            File.WriteAllText(release, "");
+        }
+
+        Assert.Equal(HttpStatusCode.NoContent, (await request).StatusCode);
+        Assert.NotNull((await setup.RecordAsync(worker.Id)).UpdateChangeId);
+        Assert.Equal(AttemptStatuses.Running, await setup.Server.QueryAsync(db => db.Attempts.Where(a => a.Id == Guid.Parse(held.AttemptId)).Select(a => a.Status).SingleAsync()));
+    }
+
+    [Fact]
+    public async Task A_lost_executor_fails_the_update_though_another_change_to_the_guest_goes_out_after_the_new_hello()
+    {
+        await using var setup = await StartAsync(Lab());
+        var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
+        await ProvisionAsync(setup, runner);
+        var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
+        Assert.Equal(HttpStatusCode.NoContent, (await setup.RequestAsync(worker.Id)).StatusCode);
+        Assignment? rollout = null;
+        await WorkAsync(setup, runner, stop: a =>
+        {
+            if (a is not { Executor: "ansible", Action: "run" })
+                return false;
+            rollout = a;
+            return true;
+        });
+        Assert.NotNull(rollout);
+        await runner.ReportAsync(rollout, Outcome.Succeeded, ConfigureRunTests.Recap());
+        await setup.Server.TickAsync();
+
+        // The rollout restarted the worker: its new process says hello on the target without OpenTofu, and the update has not
+        // been moved on yet.
+        worker = await setup.Server.ReconnectAsync(worker, Target, ["ansible", "proxmox"],
+            new Dictionary<string, string> { ["opentofu"] = "tofu is not installed" });
+        // Another change to the guest goes out to the runner before it is.
+        var resource = await setup.Server.ResourceAsync(Guest);
+        (await setup.Client.PostAsJsonAsync($"/api/guests/{resource.Id}/configure", new { action = "setup" })).EnsureSuccessStatusCode();
+        Assert.Contains("ansible:run", await WorkAsync(setup, runner, approve: true));
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+
+        var update = (await setup.AgentAsync(worker.Id))["update"]!;
+        Assert.Equal("failed", update["state"]!.GetValue<string>());
+        Assert.Equal(AgentUpdateFailures.LostExecutors, update["failure"]!.GetValue<string>());
+        Assert.Contains("opentofu (tofu is not installed)", update["reason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_revert_after_an_update_that_never_restarted_the_agent_ends_only_once_its_change_applied()
+    {
+        await using var setup = await StartAsync(Lab());
+        var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
+        await ProvisionAsync(setup, runner);
+        var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
+        Assert.Equal(HttpStatusCode.NoContent, (await setup.RequestAsync(worker.Id)).StatusCode);
+        // Its runs are cancelled before anything restarts the worker: failed, the worker still on 0.0.1, the guest declaring the new version.
+        var changeId = (await setup.RecordAsync(worker.Id)).UpdateChangeId!.Value;
+        foreach (var run in (await setup.Client.GetFromJsonAsync<ChangeDto>($"/api/changes/{changeId}"))!.Runs.Where(r => !RunStatuses.IsTerminal(r.Status)))
+            (await setup.Client.PostAsync($"/api/runs/{run.Id}/cancel", null)).EnsureSuccessStatusCode();
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+        Assert.Equal("failed", await setup.StateAsync(worker.Id));
+        Assert.True((await setup.AgentAsync(worker.Id))["update"]!["canRevert"]!.GetValue<bool>());
+
+        Assert.Equal(HttpStatusCode.NoContent, (await setup.RevertAsync(worker.Id)).StatusCode);
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+
+        // Its connection already reports 0.0.1, but its change has not applied: still in flight, paused.
+        Assert.Equal("updating", await setup.StateAsync(worker.Id));
+        Assert.True((await setup.RecordAsync(worker.Id)).Draining);
+        Assert.Contains("ansible:run", await WorkAsync(setup, runner));
+        var approval = (await setup.Server.LatestRunAsync(Guest, Operations.Configure)).Steps.Single(s => s.Name == StepNames.Approval);
+        Assert.Equal("ops", approval.DecidedBy);
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+
+        Assert.Equal("available", await setup.StateAsync(worker.Id));
+        var record = await setup.RecordAsync(worker.Id);
+        Assert.Null(record.UpdateState);
+        Assert.False(record.Draining);
+    }
+
+    [Fact]
+    public async Task An_agent_being_updated_takes_no_work_whatever_its_pause_and_a_pause_a_person_sets_stays()
+    {
+        await using var setup = await StartAsync(Lab());
+        var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
+        await ProvisionAsync(setup, runner);
+        var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
+        Assert.Equal(HttpStatusCode.NoContent, (await setup.RequestAsync(worker.Id)).StatusCode);
+        Assignment? rollout = null;
+        await WorkAsync(setup, runner, stop: a =>
+        {
+            if (a is not { Executor: "ansible", Action: "run" })
+                return false;
+            rollout = a;
+            return true;
+        });
+        Assert.NotNull(rollout);
+        Assert.NotNull((await setup.RecordAsync(worker.Id)).UpdateReleasedAt);
+
+        // A person lifts its pause while the playbook that restarts it runs; work comes that either agent could take.
+        (await setup.Client.PatchAsJsonAsync($"/api/agents/{worker.Id}", new { draining = false })).EnsureSuccessStatusCode();
+        Assert.False((await setup.RecordAsync(worker.Id)).Draining);
+        await setup.Server.WithDbAsync(db => db.Resources.Where(r => r.Kind == ResourceKinds.Installation)
+            .ExecuteUpdateAsync(u => u.SetProperty(r => r.ObserveRequestedAt, (DateTimeOffset?)null)));
+        await setup.Server.Services.GetRequiredService<Planner>().ScheduleObservesAsync(CancellationToken.None);
+        await setup.Server.TickAsync();
+        Assert.Empty(worker.TakeAssignments());
+        Assert.Contains(runner.TakeAssignments(), a => a.Action == "observe");
+
+        // The person pauses it again: theirs, and the end of the update leaves it.
+        (await setup.Client.PatchAsJsonAsync($"/api/agents/{worker.Id}", new { draining = true })).EnsureSuccessStatusCode();
+        await runner.ReportAsync(rollout, Outcome.Succeeded, ConfigureRunTests.Recap());
+        await setup.Server.TickAsync();
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+        worker = await setup.ReportVersionAsync(worker, Target);
+        Assert.Equal("current", await setup.StateAsync(worker.Id));
+        var record = await setup.RecordAsync(worker.Id);
+        Assert.True(record.Draining);
+        Assert.False(record.UpdatePaused);
+    }
+
+    [Fact]
+    public async Task An_update_waits_while_its_agent_runs_a_change_and_ends_when_it_connects_on_the_new_version()
+    {
+        var counter = new IdleTickTests.CommandCounter();
+        await using var setup = await StartAsync(Lab(second: true, policy: ""),
+            services: s => s.ConfigureDbContext<OctopushyDb>(o => o.AddInterceptors(counter)));
+        var (worker, runner, held) = await BusyWorkerAsync(setup);
+        var second = await setup.Server.ConnectAgentFromAsync(SecondAddress, "krb-app-02", "home");
+        second = await setup.ReportVersionAsync(second, "0.0.1");
+
+        // Update all: the busy worker first, the second queued behind it and not paused.
+        Assert.Equal(HttpStatusCode.NoContent, (await setup.Client.PostAsync("/api/agents/update", null)).StatusCode);
+        Assert.Equal("queued", await setup.StateAsync(second.Id));
+        Assert.False((await setup.RecordAsync(second.Id)).Draining);
+        var record = await setup.RecordAsync(worker.Id);
+        Assert.Equal(AgentUpdateStates.Updating, record.UpdateState);
+        Assert.True(record.Draining);
+        Assert.Equal("0.0.1", record.UpdatePreviousVersion);
+        Assert.Equal(["ansible", "opentofu", "proxmox"], record.UpdatePreviousExecutors!);
+
+        // Its setup is previewed by the runner; the playbook, which restarts the worker, waits for the worker's change.
+        await WorkAsync(setup, runner);
+        var playbook = (await setup.Server.LatestRunAsync(Guest, Operations.Configure)).Steps.Single(s => s.Name == StepNames.Playbook).Attempts.Single();
+        Assert.Equal(AttemptStatuses.Queued, playbook.Status);
+        Assert.Contains("to finish run of run #", playbook.WaitingReason);
+        Assert.Equal(held.AttemptId, (await setup.AgentAsync(worker.Id))["update"]!["waitingForAttemptId"]!.GetValue<string>());
+        var update = (await setup.AgentAsync(worker.Id))["update"]!;
+        Assert.Equal(AgentUpdatePhases.WaitingForIdle, update["phase"]!.GetValue<string>());
+        Assert.Null(update["deadlineAt"]);
+        Assert.Null((await setup.RecordAsync(worker.Id)).UpdateReleasedAt);
+        Assert.Empty(worker.TakeAssignments());
+        Assert.Equal(AttemptStatuses.Running, await setup.Server.QueryAsync(db => db.Attempts.Where(a => a.Id == Guid.Parse(held.AttemptId)).Select(a => a.Status).SingleAsync()));
+        Assert.Empty(worker.TakeCancels());
+
+        // Waiting costs a tick nothing more each time, and saves nothing.
+        var writes = setup.Server.Services.GetRequiredService<SavedWrites>();
+        async Task PassAsync()
+        {
+            await setup.Server.TickAsync();
+            await setup.Updates.AdvanceAsync(CancellationToken.None);
+        }
+
+        // The passes after the one that settles what was saved before.
+        await PassAsync();
+        await PassAsync();
+        var saved = writes.Count;
+        var one = await counter.CountAsync(PassAsync);
+        var two = await counter.CountAsync(PassAsync);
+        Assert.Equal(one, two);
+        Assert.Equal(saved, writes.Count);
+        Assert.Equal(AgentUpdatePhases.WaitingForIdle, (await setup.AgentAsync(worker.Id))["update"]!["phase"]!.GetValue<string>());
+
+        // The worker's change finishes: the playbook goes to the runner, and the deadline starts.
+        Assert.True(await worker.ReportAsync(held.AttemptId, Outcome.Succeeded, ConfigureRunTests.Recap()));
+        await setup.Server.TickAsync();
+        var rollout = Assert.Single(runner.TakeAssignments(), a => a is { Executor: "ansible", Action: "run" });
+        record = await setup.RecordAsync(worker.Id);
+        Assert.NotNull(record.UpdateReleasedAt);
+        Assert.Null(record.UpdateHold);
+        Assert.Equal(AgentUpdatePhases.Restarting, (await setup.AgentAsync(worker.Id))["update"]!["phase"]!.GetValue<string>());
+        await runner.ReportAsync(rollout, Outcome.Succeeded, ConfigureRunTests.Recap());
+        await PassAsync();
+
+        // The worker restarts on the new version and connects over the agent channel: the update is done.
+        setup.Server.Services.GetRequiredService<AgentConnections>().Disconnect(worker.Id);
+        var stream = new AgentStream();
+        stream.Send(new AgentMessage { Hello = new Hello { AgentVersion = Target, Executors = { "opentofu", "proxmox", "ansible" } } });
+        var service = ActivatorUtilities.CreateInstance<AgentChannelService>(setup.Server.Services);
+        _ = service.Connect(stream, stream, await AgentStream.CallAsAsync(setup.Server, worker));
+        await stream.ReadingMessages.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var listed = await setup.AgentAsync(worker.Id);
+        Assert.Equal("current", listed["update"]!["state"]!.GetValue<string>());
+        Assert.Equal("0.0.1", listed["update"]!["previousVersion"]!.GetValue<string>());
+        Assert.True(listed["update"]!["canRevert"]!.GetValue<bool>());
+        record = await setup.RecordAsync(worker.Id);
+        Assert.False(record.Draining);
+        Assert.Null(record.UpdateState);
+        Assert.Equal(0, await setup.FailuresToldAsync(worker.Id));
+        // The queue moves on.
+        Assert.Equal("updating", await setup.StateAsync(second.Id));
+        stream.Complete();
+    }
+
+    [Fact]
+    public async Task Revert_brings_back_the_recorded_version_with_a_new_commit()
+    {
+        await using var setup = await StartAsync(Lab());
+        // Nothing to revert to before an update.
+        var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
+        await ProvisionAsync(setup, runner);
+        var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
+        var listed = await setup.AgentAsync(worker.Id);
+        Assert.False(listed["update"]!["canRevert"]!.GetValue<bool>());
+        Assert.Null(listed["update"]!["previousVersion"]);
+        var refused = await setup.RevertAsync(worker.Id);
+        Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+        Assert.Contains("No version from before", await refused.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.NoContent, (await setup.RequestAsync(worker.Id)).StatusCode);
+        await WorkAsync(setup, runner);
+        // Not while it is in flight.
+        Assert.False((await setup.AgentAsync(worker.Id))["update"]!["canRevert"]!.GetValue<bool>());
+        worker = await setup.ReportVersionAsync(worker, Target);
+        listed = await setup.AgentAsync(worker.Id);
+        Assert.Equal("current", listed["update"]!["state"]!.GetValue<string>());
+        Assert.True(listed["update"]!["canRevert"]!.GetValue<bool>());
+        var commits = int.Parse(TestWorkflows.Run(setup.Remote.Root, "rev-list", "--count", "main").Trim());
+
+        Assert.Equal(HttpStatusCode.NoContent, (await setup.RevertAsync(worker.Id)).StatusCode);
+        // A new commit sets the old version; the update's commit stays in the history.
+        Assert.Contains("  worker_agent_version: 0.0.1\n", setup.RemoteFile(GuestFile));
+        Assert.Equal(commits + 1, int.Parse(TestWorkflows.Run(setup.Remote.Root, "rev-list", "--count", "main").Trim()));
+        Assert.Contains($"worker_agent_version: {Target}", TestWorkflows.Run(setup.Remote.Root, "show", $"main~1:{GuestFile}"));
+        listed = await setup.AgentAsync(worker.Id);
+        Assert.Equal("updating", listed["update"]!["state"]!.GetValue<string>());
+        Assert.True(listed["update"]!["revert"]!.GetValue<bool>());
+        Assert.Equal("0.0.1", listed["update"]!["targetVersion"]!.GetValue<string>());
+        Assert.True((await setup.RecordAsync(worker.Id)).Draining);
+
+        // Rolled out by the runner, approved with the revert as the update was; back on 0.0.1, it is done.
+        Assert.Contains("ansible:run", await WorkAsync(setup, runner));
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
+        listed = await setup.AgentAsync(worker.Id);
+        Assert.Equal("available", listed["update"]!["state"]!.GetValue<string>());
+        Assert.Equal("0.0.1", listed["update"]!["previousVersion"]!.GetValue<string>());
+        Assert.False(listed["update"]!["canRevert"]!.GetValue<bool>());
+        var record = await setup.RecordAsync(worker.Id);
+        Assert.Null(record.UpdateState);
+        Assert.False(record.Draining);
+        Assert.Equal(HttpStatusCode.Conflict, (await setup.RevertAsync(worker.Id)).StatusCode);
+    }
+
+    [Fact]
+    public async Task An_update_that_loses_an_executor_fails_and_offers_revert()
+    {
+        await using var setup = await StartAsync(Lab());
+        var (_, worker) = await RolledOutAsync(setup);
+
+        worker = await setup.ReportVersionAsync(worker, Target, ["ansible", "proxmox"], new Dictionary<string, string> { ["opentofu"] = "tofu is not installed" });
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+
+        var listed = await setup.AgentAsync(worker.Id);
+        Assert.Equal("failed", listed["update"]!["state"]!.GetValue<string>());
+        Assert.Equal(AgentUpdateFailures.LostExecutors, listed["update"]!["failure"]!.GetValue<string>());
+        var reason = listed["update"]!["reason"]!.GetValue<string>();
+        Assert.Contains("opentofu (tofu is not installed)", reason);
+        Assert.Contains("Nothing was rolled back", reason);
+        Assert.True(listed["update"]!["canRevert"]!.GetValue<bool>());
+        Assert.False((await setup.RecordAsync(worker.Id)).Draining);
+        Assert.Equal(1, await setup.FailuresToldAsync(worker.Id));
+    }
+
+    [Fact]
+    public async Task An_update_that_gains_an_executor_succeeds()
+    {
+        await using var setup = await StartAsync(Lab());
+        var (_, worker) = await RolledOutAsync(setup);
+
+        worker = await setup.ReportVersionAsync(worker, Target, ["ansible", "nix", "opentofu", "proxmox"]);
+
+        Assert.Equal("current", await setup.StateAsync(worker.Id));
+        Assert.False((await setup.RecordAsync(worker.Id)).Draining);
+        Assert.Equal(0, await setup.FailuresToldAsync(worker.Id));
+    }
+
+    [Fact]
+    public async Task An_agent_that_comes_back_on_the_old_version_fails_its_update()
+    {
+        await using var setup = await StartAsync(Lab());
+        var (_, worker) = await RolledOutAsync(setup);
+
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+
+        var listed = await setup.AgentAsync(worker.Id);
+        Assert.Equal("failed", listed["update"]!["state"]!.GetValue<string>());
+        Assert.Equal(AgentUpdateFailures.OtherVersion, listed["update"]!["failure"]!.GetValue<string>());
+        Assert.Contains("connected again on 0.0.1", listed["update"]!["reason"]!.GetValue<string>());
+        Assert.False((await setup.RecordAsync(worker.Id)).Draining);
+        Assert.Equal(1, await setup.FailuresToldAsync(worker.Id));
+        // The repository declares the new version and the agent runs the old one: Revert puts the repository back.
+        Assert.True(listed["update"]!["canRevert"]!.GetValue<bool>());
     }
 
     [Fact]

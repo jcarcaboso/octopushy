@@ -225,38 +225,60 @@ on("DELETE", "/api/agents/{id}", ({ params }) => {
   if (i < 0) return notFound("agent");
   data.agents.splice(i, 1);
 });
-// Updates run one at a time, as on the server: the agent is paused while it updates, the others wait in the queue.
+// Updates run one at a time, as on the server: the agent is paused while it updates, the others wait in the queue. Its
+// setup waits for the agent's own work first, then restarts it; a Revert is an update back to the version from before.
 const updateSeconds = Number(process.env.MOCK_UPDATE_SECONDS ?? 8);
 const pausedBefore = new Map<string, boolean>();
 
 function startUpdate(agent: Agent) {
   const guest = agent.guest ? resourceById(agent.guest.resourceId) : undefined;
   const runId = guest ? startRun(guest, "configure") : null;
+  const revert = agent.update.state === "queued" ? agent.update.revert : false;
+  const target = revert ? (agent.update.previousVersion ?? data.latestAgentVersion) : data.latestAgentVersion;
+  const previousVersion = revert ? agent.update.previousVersion : agent.version;
   pausedBefore.set(agent.id, agent.draining);
   Object.assign(agent, { draining: true });
-  agent.update = { state: "updating", targetVersion: data.latestAgentVersion, reason: null, changeId: null, runId };
+  const going = { state: "updating", targetVersion: target, reason: null, changeId: null, runId, previousVersion, canRevert: false, revert };
+  agent.update = { ...going, phase: agent.work.length > 0 ? "waiting-for-idle" : "rolling-out" };
+  setTimeout(() => {
+    agent.update = { ...going, phase: "restarting", deadlineAt: new Date(Date.now() + 30 * 60_000).toISOString() };
+  }, (updateSeconds * 1000) / 2);
   setTimeout(() => {
     const run = runs.find((r) => r.run.id === runId);
     if (run) Object.assign(run.run, { status: "succeeded", finishedAt: new Date().toISOString(), waiting: null });
-    Object.assign(agent, { version: data.latestAgentVersion, draining: pausedBefore.get(agent.id) ?? false });
-    if (agent.guest) agent.guest.declaredVersion = data.latestAgentVersion;
-    agent.update = { state: "current", targetVersion: null, reason: null, changeId: null, runId: null };
+    Object.assign(agent, { version: target, draining: pausedBefore.get(agent.id) ?? false });
+    if (agent.guest) agent.guest.declaredVersion = target;
+    agent.update = revert
+      ? { state: "available", targetVersion: data.latestAgentVersion, reason: null, changeId: null, runId: null, previousVersion, canRevert: false, revert: false }
+      : { state: "current", targetVersion: null, reason: null, changeId: null, runId: null, previousVersion, canRevert: !!previousVersion, revert: false };
     const next = data.agents.find((a) => a.update.state === "queued");
     if (next) startUpdate(next);
   }, updateSeconds * 1000);
+}
+
+function queueOrStart(agent: Agent, revert: boolean) {
+  if (data.agents.some((a) => a.update.state === "updating")) {
+    const targetVersion = revert ? (agent.update.previousVersion ?? null) : data.latestAgentVersion;
+    agent.update = { ...agent.update, state: "queued", targetVersion, reason: null, failure: null, canRevert: false, revert };
+  } else {
+    agent.update = { ...agent.update, state: "queued", revert };
+    startUpdate(agent);
+  }
 }
 
 function requestUpdate(agent: Agent): Reply | undefined {
   if (agent.update.state === "current") return problem(409, `${agent.name} already runs the latest version.`);
   if (agent.update.state === "unavailable") return problem(409, agent.update.reason ?? `${agent.name} cannot be updated from here.`);
   if (agent.update.state === "queued" || agent.update.state === "updating") return problem(409, `${agent.name} is already being updated.`);
-  if (data.agents.some((a) => a.update.state === "updating")) {
-    agent.update = { ...agent.update, state: "queued", targetVersion: data.latestAgentVersion, reason: null };
-  } else {
-    startUpdate(agent);
-  }
+  queueOrStart(agent, false);
 }
 
+on("POST", "/api/agents/{id}/revert", ({ params }) => {
+  const agent = data.agents.find((a) => a.id === params.id);
+  if (!agent) return notFound("agent");
+  if (!agent.update.canRevert) return problem(409, `No version from before an update is recorded for ${agent.name}.`);
+  queueOrStart(agent, true);
+});
 on("POST", "/api/agents/{id}/update", ({ params }) => {
   const agent = data.agents.find((a) => a.id === params.id);
   return agent ? requestUpdate(agent) : notFound("agent");
@@ -265,10 +287,12 @@ on("DELETE", "/api/agents/{id}/update", ({ params }) => {
   const agent = data.agents.find((a) => a.id === params.id);
   if (!agent) return notFound("agent");
   if (agent.update.state !== "queued") return problem(409, `${agent.name} is not waiting for an update.`);
-  agent.update = { state: "available", targetVersion: data.latestAgentVersion, reason: null, changeId: null, runId: null };
+  agent.update = { state: "available", targetVersion: data.latestAgentVersion, reason: null, changeId: null, runId: null, previousVersion: agent.update.previousVersion, canRevert: !!agent.update.previousVersion, revert: false };
 });
 on("POST", "/api/agents/update", () => {
-  for (const agent of data.agents.filter((a) => a.update.state === "available" || a.update.state === "failed")) requestUpdate(agent);
+  // Never a Revert, and not an agent whose failed update left it on the latest version.
+  for (const agent of data.agents.filter((a) => a.update.state === "available" || (a.update.state === "failed" && a.version !== data.latestAgentVersion)))
+    requestUpdate(agent);
 });
 on("GET", "/api/agents/tokens", () => data.tokens);
 on("POST", "/api/agents/tokens", ({ body }) => {

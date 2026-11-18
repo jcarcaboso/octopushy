@@ -40,7 +40,8 @@ public sealed class AgentPresence(IServiceScopeFactory scopes, AgentConnections 
         foreach (var agent in agents)
         {
             var connected = connections.IsConnected(agent.Id);
-            if (agent.OfflineNotifiedAt is null && !connected)
+            // An agent its update is restarting is away on purpose: the update's deadline tells if it does not come back.
+            if (agent.OfflineNotifiedAt is null && !connected && !(agent.UpdateState == AgentUpdateStates.Updating && agent.UpdateReleasedAt != null))
             {
                 agent.OfflineNotifiedAt = now;
                 NotificationHub.AgentTurned(db, agent, online: false, now);

@@ -529,6 +529,15 @@ export function useUpdateAgentVersion() {
   });
 }
 
+/** Brings an agent back to the version it ran before its last update, through the same flow as an update. */
+export function useRevertAgentVersion() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => unwrap(api.POST("/api/agents/{id}/revert", { params: { path: { id } } })),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.agents }),
+  });
+}
+
 /** Takes a queued agent out of the update queue. */
 export function useCancelAgentUpdate() {
   const client = useQueryClient();
