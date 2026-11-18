@@ -1,0 +1,75 @@
+# Weekly dependency updates, one pull request per group so they do not flood the queue.
+# Major versions come one pull request each, except for images, where a major (a new .NET,
+# Node or PostgreSQL) is a migration and is done by hand.
+#
+# A bump in agent/ansible/ needs a second edit in the same pull request, and CI fails until
+# it is made: the image tag the folder hashes to, in OctopushyOptions.cs (scripts/checks/offline.sh).
+# global.json is not updated here: it is the oldest SDK a developer's machine may use. The SDK
+# the images and CI build with is the tag in backend/Containerfile, and that one is updated.
+version: 2
+
+multi-ecosystem-groups:
+  images:
+    schedule:
+      interval: weekly
+      day: monday
+
+updates:
+  - package-ecosystem: nuget
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      nuget:
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /agent
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      cargo:
+        update-types: [minor, patch]
+
+  # pnpm: the npm ecosystem reads frontend/pnpm-lock.yaml.
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      frontend:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Base images and the Rust toolchain arrive in one pull request, so the Rust image in
+  # agent/Containerfile and agent/rust-toolchain.toml move together (scripts/checks/toolchains.sh).
+  - package-ecosystem: docker
+    multi-ecosystem-group: images
+    patterns: ["*"]
+    directories:
+      - /backend
+      - /backend/src/Octopushy.Validate
+      - /frontend
+      - /agent
+      - /agent/ansible
+      - /tests/ansible/target
+      - /tests/proxmox-snippets
+    ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: rust-toolchain
+    multi-ecosystem-group: images
+    patterns: ["*"]
+    directory: /agent
