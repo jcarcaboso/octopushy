@@ -180,9 +180,18 @@ pub struct UserPool {
     unreclaimed: Mutex<Vec<(u32, PathBuf)>>,
     /// The most entries one sweep looks at.
     sweep_limit: AtomicUsize,
+    /// How long a user's processes may take to die, in milliseconds.
+    kill_timeout_ms: AtomicUsize,
+    /// Users a process of which outlived one of their attempt's tool runs.
+    tainted: Mutex<Vec<u32>>,
+    /// Where the next search for a quarantined user to try again starts.
+    retry_from: AtomicUsize,
     /// Users whose cleanup fails whatever happens, for tests.
     #[cfg(test)]
     fail_cleanup: Mutex<Vec<u32>>,
+    /// Holds every cleanup until the test opens it, counting them.
+    #[cfg(test)]
+    gate: Mutex<Option<Arc<tests::Gate>>>,
 }
 
 impl UserPool {
@@ -269,8 +278,13 @@ impl UserPool {
             kept: Mutex::new(Vec::new()),
             unreclaimed: Mutex::new(Vec::new()),
             sweep_limit: AtomicUsize::new(SWEEP_LIMIT),
+            kill_timeout_ms: AtomicUsize::new(KILL_TIMEOUT.as_millis() as usize),
+            tainted: Mutex::new(Vec::new()),
+            retry_from: AtomicUsize::new(0),
             #[cfg(test)]
             fail_cleanup: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            gate: Mutex::new(None),
         })
     }
 
@@ -285,27 +299,45 @@ impl UserPool {
     }
 
     /// Ends whatever `user` left: kills its processes, takes its workspaces back, removes what it
-    /// owns in the shared directories and its IPC objects. `Ok` only when each step is done and
-    /// verified; otherwise why not, and nothing may run as the user again until a later cleanup
-    /// succeeds.
+    /// owns in `/dev/shm` and its IPC objects. `Ok` only when each step is done and verified;
+    /// otherwise why not, and nothing may run as the user again until a later cleanup succeeds.
+    /// Runs only inside a cleanup job ([`UserPool::spawn_cleanup`]) or at startup, so never twice
+    /// at once for one user.
     fn cleanup(&self, user: ToolUser, workspace: Option<&Path>) -> Result<(), String> {
+        #[cfg(test)]
+        let _held = self.gate.lock().unwrap().clone().map(|g| g.pass());
         let mut problems = Vec::new();
         // First: a process still running could leave more behind.
-        if !kill_all(user, KILL_TIMEOUT) {
+        if !kill_all(user, self.kill_timeout()) {
             problems.push("its processes survive SIGKILL, or /proc cannot tell".to_owned());
         }
-        let mut workspaces: Vec<PathBuf> = {
-            let mut unreclaimed = self.unreclaimed.lock().unwrap();
-            let (mine, others): (Vec<_>, Vec<_>) =
-                unreclaimed.drain(..).partition(|(uid, _)| *uid == user.uid);
-            *unreclaimed = others;
-            mine.into_iter().map(|(_, ws)| ws).collect()
-        };
-        workspaces.extend(workspace.map(Path::to_path_buf));
+        // Workspaces an earlier cleanup could not take back stay listed until one does.
+        let mut workspaces: Vec<PathBuf> = self
+            .unreclaimed
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(uid, _)| *uid == user.uid)
+            .map(|(_, ws)| ws.clone())
+            .collect();
+        if let Some(ws) = workspace
+            && !workspaces.iter().any(|w| w == ws)
+        {
+            workspaces.push(ws.to_path_buf());
+        }
         for ws in workspaces {
-            if let Err(e) = reclaim(&ws) {
-                problems.push(format!("cannot take back {}: {e:#}", ws.display()));
-                self.unreclaimed.lock().unwrap().push((user.uid, ws));
+            let mut unreclaimed = self.unreclaimed.lock().unwrap();
+            match reclaim(&ws) {
+                Ok(()) => unreclaimed.retain(|(uid, w)| !(*uid == user.uid && *w == ws)),
+                Err(e) => {
+                    problems.push(format!("cannot take back {}: {e:#}", ws.display()));
+                    if !unreclaimed
+                        .iter()
+                        .any(|(uid, w)| *uid == user.uid && *w == ws)
+                    {
+                        unreclaimed.push((user.uid, ws));
+                    }
+                }
             }
         }
         let kept = self.kept.lock().unwrap().clone();
@@ -327,6 +359,76 @@ impl UserPool {
         }
     }
 
+    /// Starts a cleanup of `user` as a job of its own, which holds `owner`, the slot's cleaning
+    /// state or the Nix turn, until it ends, and then records the outcome itself: whoever waits
+    /// for it may stop waiting without letting another cleanup, or a lease, in meanwhile. The
+    /// handle gives the outcome back, with the Nix turn, which is given up once the handle is
+    /// dropped. A release is clean only if no process of the user survived one of the attempt's
+    /// tool runs either; a successful retry clears that.
+    fn spawn_cleanup(
+        self: &Arc<Self>,
+        user: ToolUser,
+        workspace: Option<PathBuf>,
+        owner: Owner,
+        kind: CleanupKind,
+    ) -> tokio::task::JoinHandle<(Result<(), String>, Option<OwnedSemaphorePermit>)> {
+        let pool = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let (slot, turn) = match owner {
+                Owner::Slot(i) => (Some(i), None),
+                Owner::Nix(turn) => (None, Some(turn)),
+            };
+            // Records the outcome when it drops, a panic's included, before the turn is given up.
+            let mut finish = Finish {
+                pool: pool.clone(),
+                slot,
+                clean: false,
+            };
+            let mut result = pool.cleanup(user, workspace.as_deref());
+            match kind {
+                CleanupKind::Release if result.is_ok() && pool.is_tainted(user.uid) => {
+                    result = Err(
+                        "a process of the user outlived one of the attempt's tool runs, \
+                         so it stays quarantined until a later cleanup"
+                            .into(),
+                    );
+                }
+                CleanupKind::Retry if result.is_ok() => pool.untaint(user.uid),
+                _ => {}
+            }
+            finish.clean = result.is_ok();
+            drop(finish);
+            (result, turn)
+        })
+    }
+
+    /// Marks `uid` as having had a process outlive one of its tool runs: no tool runs as it again
+    /// in the attempt, and its release quarantines it.
+    pub fn taint(&self, uid: u32) {
+        let mut tainted = self.tainted.lock().unwrap();
+        if !tainted.contains(&uid) {
+            tainted.push(uid);
+        }
+    }
+
+    pub fn is_tainted(&self, uid: u32) -> bool {
+        self.tainted.lock().unwrap().contains(&uid)
+    }
+
+    fn untaint(&self, uid: u32) {
+        self.tainted.lock().unwrap().retain(|&u| u != uid);
+    }
+
+    /// How long the processes of a user may take to die before its cleanup fails.
+    pub fn kill_timeout(&self) -> Duration {
+        Duration::from_millis(self.kill_timeout_ms.load(Ordering::Relaxed) as u64)
+    }
+
+    pub fn set_kill_timeout(&self, timeout: Duration) {
+        self.kill_timeout_ms
+            .store(timeout.as_millis() as usize, Ordering::Relaxed);
+    }
+
     /// How many attempts can run tools at once.
     pub fn size(&self) -> usize {
         self.users.len()
@@ -345,7 +447,8 @@ impl UserPool {
         self.users.iter().copied().chain(self.nix)
     }
 
-    /// The users nothing runs as because their last cleanup failed, Nix's included.
+    /// The users nothing runs as because their last cleanup failed, or one runs now, Nix's
+    /// included.
     pub fn quarantined(&self) -> Vec<u32> {
         let slots = self.slots.lock().unwrap();
         let mut out: Vec<u32> = self
@@ -372,30 +475,35 @@ impl UserPool {
         if *self.nix_clean.lock().unwrap() {
             return Ok(());
         }
-        let Ok(_turn) = self.nix_turn.clone().try_acquire_owned() else {
+        let Ok(turn) = self.nix_turn.clone().try_acquire_owned() else {
             return Ok(());
         };
-        self.clean_nix(user).await
+        self.clean_nix(user, turn).await.map(drop)
     }
 
-    /// Cleans the Nix user up again; the caller holds its turn.
-    async fn clean_nix(self: &Arc<Self>, user: ToolUser) -> Result<()> {
-        let pool = self.clone();
-        let result = tokio::task::spawn_blocking(move || pool.cleanup(user, None))
-            .await
-            .unwrap_or_else(|_| Err("the cleanup panicked".into()));
-        *self.nix_clean.lock().unwrap() = result.is_ok();
-        result.map_err(|why| {
-            anyhow::anyhow!(
+    /// Cleans the Nix user up again in a job that holds `turn` until it ends. On success the turn
+    /// comes back for a build.
+    async fn clean_nix(
+        self: &Arc<Self>,
+        user: ToolUser,
+        turn: OwnedSemaphorePermit,
+    ) -> Result<OwnedSemaphorePermit> {
+        let job = self.spawn_cleanup(user, None, Owner::Nix(turn), CleanupKind::Retry);
+        let (result, turn) = job.await.context("the cleanup of the Nix user")?;
+        match (result, turn) {
+            (Ok(()), Some(turn)) => Ok(turn),
+            (Ok(()), None) => bail!("the cleanup of the Nix user lost its turn"),
+            (Err(why), _) => bail!(
                 "the Nix store's owner (uid {}) is not clean, so no build runs as it: {why}",
                 user.uid
-            )
-        })
+            ),
+        }
     }
 
     /// A user of its own for an attempt of `executor`, or `None` when the executor runs no tool.
     /// A Nix build waits for the store's owner, and fails while it cannot be cleaned up; anything
-    /// else waits for a free pool user, or a quarantined one whose cleanup now succeeds.
+    /// else waits for a free pool user, or a quarantined one whose cleanup now succeeds. Each
+    /// quarantined user is tried in turn, once each, before it waits again.
     pub async fn lease(self: &Arc<Self>, executor: &str) -> Result<Option<Lease>> {
         match executor {
             "opentofu" | "ansible" => {}
@@ -403,9 +511,9 @@ impl UserPool {
                 let Some(user) = self.nix else {
                     bail!("the Nix store is root's, so no build can run as an unprivileged user");
                 };
-                let turn = self.nix_turn.clone().acquire_owned().await?;
+                let mut turn = self.nix_turn.clone().acquire_owned().await?;
                 if !*self.nix_clean.lock().unwrap() {
-                    self.clean_nix(user).await?;
+                    turn = self.clean_nix(user, turn).await?;
                 }
                 return Ok(Some(Lease {
                     pool: self.clone(),
@@ -417,6 +525,7 @@ impl UserPool {
             }
             _ => return Ok(None),
         }
+        let mut tried: Vec<usize> = Vec::new();
         loop {
             let freed = self.freed.notified();
             tokio::pin!(freed);
@@ -433,44 +542,39 @@ impl UserPool {
                         _nix_turn: None,
                     }));
                 }
-                let quarantined = slots.iter().position(|s| *s == Slot::Quarantined);
-                if let Some(i) = quarantined {
+                let n = slots.len();
+                let from = self.retry_from.load(Ordering::Relaxed);
+                let next = (0..n)
+                    .map(|k| (from + k) % n)
+                    .find(|i| slots[*i] == Slot::Quarantined && !tried.contains(i));
+                if let Some(i) = next {
                     slots[i] = Slot::Retrying;
+                    self.retry_from.store(i + 1, Ordering::Relaxed);
                 }
-                quarantined
+                next
             };
-            if let Some(i) = retry {
-                // Back to quarantine unless the cleanup succeeds, even if this lease is dropped.
-                let mut guard = RetryGuard {
-                    pool: self,
-                    slot: i,
-                    leased: false,
-                };
-                let pool = self.clone();
-                let user = self.users[i];
-                let result = tokio::task::spawn_blocking(move || pool.cleanup(user, None))
-                    .await
-                    .unwrap_or_else(|_| Err("the cleanup panicked".into()));
-                match result {
-                    Ok(()) => {
-                        guard.leased = true;
-                        self.slots.lock().unwrap()[i] = Slot::Leased;
-                        tracing::info!(uid = user.uid, "a quarantined tool user is clean again");
-                        return Ok(Some(Lease {
-                            pool: self.clone(),
-                            slot: Some(i),
-                            user,
-                            released: false,
-                            _nix_turn: None,
-                        }));
+            match retry {
+                Some(i) => {
+                    tried.push(i);
+                    let user = self.users[i];
+                    // The job owns the slot until it ends: dropping this wait changes nothing.
+                    let job = self.spawn_cleanup(user, None, Owner::Slot(i), CleanupKind::Retry);
+                    match job.await {
+                        Ok((Ok(()), _)) => {
+                            tracing::info!(uid = user.uid, "a quarantined tool user is clean again")
+                        }
+                        Ok((Err(why), _)) => {
+                            tracing::warn!(uid = user.uid, "a tool user is still not clean: {why}")
+                        }
+                        Err(e) => tracing::error!(uid = user.uid, "a cleanup failed: {e}"),
                     }
-                    Err(why) => {
-                        tracing::warn!(uid = user.uid, "a tool user is still not clean: {why}")
-                    }
+                }
+                None => {
+                    // Every quarantined user was tried: a release, or time to try them again.
+                    tried.clear();
+                    let _ = tokio::time::timeout(RETRY_QUARANTINED, freed).await;
                 }
             }
-            // A release, or time to try a quarantined user again.
-            let _ = tokio::time::timeout(RETRY_QUARANTINED, freed).await;
         }
     }
 
@@ -513,18 +617,43 @@ impl UserPool {
     }
 }
 
-/// Puts a user being cleaned up again back in quarantine unless it was leased.
-struct RetryGuard<'a> {
-    pool: &'a UserPool,
-    slot: usize,
-    leased: bool,
+/// What a cleanup job holds until it ends.
+enum Owner {
+    /// A pool user's slot, `Retrying` or `Leased` meanwhile.
+    Slot(usize),
+    /// The Nix turn: no build runs meanwhile.
+    Nix(OwnedSemaphorePermit),
 }
 
-impl Drop for RetryGuard<'_> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CleanupKind {
+    /// At the end of an attempt.
+    Release,
+    /// Of a quarantined user, before it may be leased.
+    Retry,
+}
+
+/// Records how a cleanup job ended, when dropped: a pool user free or quarantined, the Nix user
+/// clean or not. A job that panicked leaves its user quarantined.
+struct Finish {
+    pool: Arc<UserPool>,
+    slot: Option<usize>,
+    clean: bool,
+}
+
+impl Drop for Finish {
     fn drop(&mut self) {
-        if !self.leased {
-            self.pool.slots.lock().unwrap()[self.slot] = Slot::Quarantined;
+        match self.slot {
+            Some(i) => {
+                self.pool.slots.lock().unwrap()[i] = if self.clean {
+                    Slot::Free
+                } else {
+                    Slot::Quarantined
+                };
+            }
+            None => *self.pool.nix_clean.lock().unwrap() = self.clean,
         }
+        self.pool.freed.notify_waiters();
     }
 }
 
@@ -543,33 +672,39 @@ impl Lease {
         self.user
     }
 
+    /// Whether a process of the user outlived one of the attempt's tool runs: what the attempt
+    /// did, or read back, cannot be trusted.
+    pub fn tainted(&self) -> bool {
+        self.pool.is_tainted(self.user.uid)
+    }
+
     /// Ends the attempt's hold on its user: kills its processes, takes `workspace` back, removes
-    /// what the user owns in the shared directories and its IPC objects. Returns the user to the
-    /// pool only when all of it is done and verified, and quarantines it otherwise. Nix's user is
-    /// marked unclean before its turn is given back.
+    /// what the user owns in `/dev/shm` and its IPC objects, in a job that holds the user until
+    /// it ends. Returns the user to the pool only when all of it is done and verified, and no
+    /// process of it outlived a tool run; quarantines it otherwise. Nix's user is marked unclean
+    /// before its turn is given back.
     pub async fn release(mut self, workspace: &Path) {
         let user = self.user;
-        let pool = self.pool.clone();
-        let ws = workspace.to_path_buf();
-        let result = tokio::task::spawn_blocking(move || pool.cleanup(user, Some(&ws)))
-            .await
-            .unwrap_or_else(|_| Err("the cleanup panicked".into()));
-        if let Err(why) = &result {
-            tracing::error!(
+        let owner = match (self.slot, self._nix_turn.take()) {
+            (Some(i), _) => Owner::Slot(i),
+            (None, Some(turn)) => Owner::Nix(turn),
+            (None, None) => return,
+        };
+        self.released = true;
+        let job = self.pool.spawn_cleanup(
+            user,
+            Some(workspace.to_path_buf()),
+            owner,
+            CleanupKind::Release,
+        );
+        match job.await {
+            Ok((Ok(()), _)) => {}
+            Ok((Err(why), _)) => tracing::error!(
                 uid = user.uid,
                 "a tool user is not clean, so nothing runs as it until a later cleanup succeeds: {why}"
-            );
+            ),
+            Err(e) => tracing::error!(uid = user.uid, "the cleanup of a tool user failed: {e}"),
         }
-        let clean = result.is_ok();
-        match self.slot {
-            Some(i) => {
-                self.pool.slots.lock().unwrap()[i] =
-                    if clean { Slot::Free } else { Slot::Quarantined };
-            }
-            None => *self.pool.nix_clean.lock().unwrap() = clean,
-        }
-        self.released = true;
-        self.pool.freed.notify_waiters();
     }
 }
 
@@ -1171,6 +1306,167 @@ mod tests {
             )
             .unwrap(),
         )
+    }
+
+    /// Holds cleanups until opened; counts those that started and the most that ran at once.
+    #[derive(Debug, Default)]
+    pub(super) struct Gate {
+        open: Mutex<bool>,
+        opened: std::sync::Condvar,
+        pub started: std::sync::atomic::AtomicUsize,
+        running: std::sync::atomic::AtomicUsize,
+        pub most_at_once: std::sync::atomic::AtomicUsize,
+    }
+
+    /// Marks a cleanup as running until dropped.
+    pub(super) struct Passing(Arc<Gate>);
+
+    impl Drop for Passing {
+        fn drop(&mut self) {
+            self.0.running.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    impl Gate {
+        pub(super) fn pass(self: Arc<Self>) -> Passing {
+            self.started.fetch_add(1, Ordering::SeqCst);
+            let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
+            self.most_at_once.fetch_max(now, Ordering::SeqCst);
+            let mut open = self.open.lock().unwrap();
+            while !*open {
+                open = self.opened.wait(open).unwrap();
+            }
+            drop(open);
+            Passing(self)
+        }
+
+        fn open(&self) {
+            *self.open.lock().unwrap() = true;
+            self.opened.notify_all();
+        }
+
+        fn started(&self) -> usize {
+            self.started.load(Ordering::SeqCst)
+        }
+    }
+
+    fn hold(pool: &UserPool) -> Arc<Gate> {
+        let gate = Arc::new(Gate::default());
+        *pool.gate.lock().unwrap() = Some(gate.clone());
+        gate
+    }
+
+    async fn until(what: &str, mut done: impl FnMut() -> bool) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !done() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{what}"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_cancelled_waiter_leaves_its_cleanup_to_finish_alone() {
+        let a = 4_300_051;
+        let pool = pool_of(&[a], None);
+        fail_cleanup(&pool, a, true);
+        let _ = pool.clean_all();
+        fail_cleanup(&pool, a, false);
+        let gate = hold(&pool);
+        let first = {
+            let pool = pool.clone();
+            tokio::spawn(async move { pool.lease("opentofu").await })
+        };
+        until("the first cleanup starts", || gate.started() == 1).await;
+        first.abort();
+        let _ = first.await;
+        // The cleanup still runs: nobody else cleans the user up, nor leases it, meanwhile.
+        let second = {
+            let pool = pool.clone();
+            tokio::spawn(async move { pool.lease("opentofu").await.unwrap().unwrap() })
+        };
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        pool.freed.notify_waiters();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            gate.started(),
+            1,
+            "a second cleanup started while the first ran"
+        );
+        assert!(
+            !second.is_finished(),
+            "the user was leased while its cleanup ran"
+        );
+        assert_eq!(pool.quarantined(), [a]);
+        gate.open();
+        let lease = tokio::time::timeout(Duration::from_secs(5), second)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(lease.user().uid, a);
+        assert_eq!(
+            gate.started(),
+            1,
+            "leased after the first cleanup, without another"
+        );
+        assert_eq!(gate.most_at_once.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_cancelled_nix_lease_keeps_the_turn_until_its_cleanup_ends() {
+        let nix = 4_300_062;
+        let pool = pool_of(&[4_300_061], Some(nix));
+        fail_cleanup(&pool, nix, true);
+        pool.clean_all().unwrap();
+        fail_cleanup(&pool, nix, false);
+        let gate = hold(&pool);
+        let first = {
+            let pool = pool.clone();
+            tokio::spawn(async move { pool.lease("nix").await })
+        };
+        until("the Nix cleanup starts", || gate.started() == 1).await;
+        first.abort();
+        let _ = first.await;
+        let second = {
+            let pool = pool.clone();
+            tokio::spawn(async move { pool.lease("nix").await.unwrap().unwrap() })
+        };
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            gate.started(),
+            1,
+            "a second Nix cleanup started while the first ran"
+        );
+        assert!(
+            !second.is_finished(),
+            "a build got the turn while the cleanup ran"
+        );
+        gate.open();
+        let lease = tokio::time::timeout(Duration::from_secs(5), second)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(lease.user().uid, nix);
+        assert_eq!(gate.started(), 1);
+        assert_eq!(gate.most_at_once.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_user_that_never_comes_clean_does_not_starve_the_others() {
+        let (a, b) = (4_300_071, 4_300_072);
+        let pool = pool_of(&[a, b], None);
+        fail_cleanup(&pool, a, true);
+        fail_cleanup(&pool, b, true);
+        assert!(pool.clean_all().is_err());
+        // a never comes clean; b would now.
+        fail_cleanup(&pool, b, false);
+        let lease = tokio::time::timeout(Duration::from_secs(3), pool.lease("opentofu"))
+            .await
+            .expect("b is never tried while a is")
+            .unwrap()
+            .unwrap();
+        assert_eq!(lease.user().uid, b);
     }
 
     fn fail_cleanup(pool: &UserPool, uid: u32, fail: bool) {
