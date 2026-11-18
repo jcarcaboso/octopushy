@@ -548,7 +548,8 @@ impl UserPool {
     }
 
     /// Whether Nix builds can run: its user is clean, or is cleaned now. Waits for no build: one
-    /// that runs had a clean user when it started.
+    /// that runs had a clean user when it started. While another cleanup of it runs, it is not
+    /// ready: nothing may run as it until that cleanup has succeeded.
     pub async fn nix_ready(self: &Arc<Self>) -> Result<()> {
         let Some(user) = self.nix else {
             bail!("the Nix store is root's, so no build can run as an unprivileged user");
@@ -557,7 +558,13 @@ impl UserPool {
             return Ok(());
         }
         let Ok(turn) = self.nix_turn.clone().try_acquire_owned() else {
-            return Ok(());
+            if *self.nix_clean.lock().unwrap() {
+                return Ok(());
+            }
+            bail!(
+                "the Nix store's owner (uid {}) is being cleaned up, so nothing runs as it yet",
+                user.uid
+            );
         };
         self.clean_nix(user, turn).await.map(drop)
     }
@@ -1502,6 +1509,36 @@ mod tests {
             "leased after the first cleanup, without another"
         );
         assert_eq!(gate.most_at_once.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_nix_user_is_not_ready_while_another_cleanup_of_it_runs() {
+        let nix = 4_300_072;
+        let pool = pool_of(&[4_300_071], Some(nix));
+        fail_cleanup(&pool, nix, true);
+        pool.clean_all().unwrap();
+        fail_cleanup(&pool, nix, false);
+        let gate = hold(&pool);
+        let lease = {
+            let pool = pool.clone();
+            tokio::spawn(async move { pool.lease("nix").await })
+        };
+        until("the Nix cleanup starts", || gate.started() == 1).await;
+        let ready = pool.nix_ready().await;
+        // Opened before asserting, so a failure does not leave the cleanup blocked forever.
+        gate.open();
+        assert!(
+            ready.is_err(),
+            "the Nix user was ready while its cleanup ran"
+        );
+        let lease = tokio::time::timeout(Duration::from_secs(5), lease)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        drop(lease);
+        assert!(pool.nix_ready().await.is_ok());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
