@@ -656,7 +656,11 @@ public sealed partial class RunEngine(
         db.Attempts.Add(attempt);
     }
 
-    /// <summary>Records what a finished step established about its resource.</summary>
+    /// <summary>
+    /// Records what a finished step established about its resource: a stage's step through its stage, and any other through its
+    /// effect, <see cref="StepEffectFor(string, string)"/>. A plan is first refused if it acts on a machine that is not the guest's,
+    /// and made again if its host key no longer fits, before anything is recorded; see docs/safety-boundary.md.
+    /// </summary>
     private async Task ApplyEffectsAsync(OctopushyDb db, VariableStore store, Run run, Step step, JsonNode? outputs, CancellationToken cancellationToken)
     {
         if (step.Stage is not null)
@@ -680,87 +684,7 @@ public sealed partial class RunEngine(
         var resource = await db.Resources.FirstAsync(r => r.Id == run.ResourceId, cancellationToken);
         var now = clock.GetUtcNow();
         if (StepEffectFor(step.Name, run.Operation) is { } effect)
-        {
             await effect.ApplyAsync(this, db, store, run, step, resource, outputs, now, cancellationToken);
-            return;
-        }
-
-        switch (step.Name)
-        {
-            case StepNames.Apply when run.Operation == Operations.Provision:
-                resource.AppliedInputsHash = run.InputsHash;
-                resource.AppliedRevisionId = run.RevisionId;
-                resource.AppliedAt = now;
-                resource.SyncedInputsHash = run.InputsHash;
-                resource.Outputs = outputs?["outputs"]?.ToJsonString();
-                // Not bound here: a guest owns a VM once verify-guest confirms the create; see the verify step.
-                if (resource.BoundVmid is null && SafetyBoundary.Reserves(resource, RunContext.Parse(run.Context))
-                    && run.Steps.Single(s => s.Name == StepNames.Plan).Outputs is { } planText
-                    && GuestVmPlan.MakesGuestMachine(JsonNode.Parse(planText), RunContext.Parse(run.Context)))
-                    resource.ReservationAppliedAt = now;
-                await ProposeConfigurationAgainAsync(db, run, cancellationToken);
-                await ProposeServicesAgainAsync(db, run, cancellationToken);
-                await RecordProvisionedKeyAsync(db, run, now, cancellationToken);
-                await RecordDeliveredHostKeyAsync(db, run, now, cancellationToken);
-                break;
-            // An attached machine: verified at its VMID, on its host, of its kind, then protected. Only then is the guest bound,
-            // on a person's word, recorded as the run's approval. Octopushy did not create it, so nothing else could bind it.
-            case StepNames.Protect when run.Operation == Operations.Attach:
-                var attaching = RunContext.Parse(run.Context);
-                if (await SafetyBoundary.AttachProblemAsync(db, resource, resource.ParentAddress!, attaching.Proxmox.Vmid!.Value, cancellationToken) is { } problem)
-                {
-                    step.Status = StepStatuses.Failed;
-                    step.Detail = $"Protection is on, and the guest is not attached: {problem}.";
-                    break;
-                }
-                resource.BoundInstallation = resource.ParentAddress;
-                resource.BoundVmid = attaching.Proxmox.Vmid;
-                resource.BoundAt = now;
-                resource.AttachedAt = now;
-                resource.AttachedBy = run.Steps.Single(s => s.Name == StepNames.Approval).DecidedBy;
-                resource.ProvisionWaiting = null;
-                break;
-            case StepNames.Verify:
-                // Ownership comes only from a confirmed creation: an apply of an approved plan of this guest created
-                // its VMID on its node, and the VM verified now carries Octopushy's marks. Nothing else binds.
-                if (resource.BoundVmid is null)
-                {
-                    var verifying = RunContext.Parse(run.Context);
-                    if (!SafetyBoundary.Reserves(resource, verifying) || resource.ReservationAppliedAt is null)
-                    {
-                        step.Detail = $"{verifying.Proxmox.Machine} {verifying.Proxmox.Vmid} on {verifying.Proxmox.Node} is not recorded as this guest's: "
-                            + "no apply of an approved plan of this guest has created it.";
-                    }
-                    else if (SafetyBoundary.MarksMissing(outputs, verifying) is { } missing)
-                    {
-                        step.Status = StepStatuses.Failed;
-                        step.Detail = missing;
-                        break;
-                    }
-                    else
-                    {
-                        resource.BoundInstallation = resource.ParentAddress;
-                        resource.BoundVmid = verifying.Proxmox.Vmid;
-                        resource.BoundAt = now;
-                    }
-                }
-
-                // A container's host keys, as the create task of the apply that made it logged them, are the pin of its
-                // Ansible work. Only the answer of the attempt that was asked, about a container this guest owns: keys an
-                // attempt reports without being asked, as after the token that applied was revoked, pin nothing.
-                if (RunContext.Parse(run.Context) is { ContainerHostKey: true, HostKeysRequest: { } asked } pinning
-                    && step.Attempts.OrderByDescending(a => a.Number).FirstOrDefault()?.Id == asked.AttemptId
-                    && resource.BoundVmid == pinning.Proxmox.Vmid && resource.BoundInstallation == resource.ParentAddress)
-                {
-                    if (ContainerHostKeys.Read(outputs) is { } fingerprints)
-                        await ContainerHostKeys.RecordAsync(store, resource.Id, fingerprints, cancellationToken);
-                    else if (outputs?["hostKeysError"]?.ToString() is { Length: > 0 } unread)
-                        step.Detail = $"The container's host keys could not be read again from the run that created it: {unread}";
-                }
-
-                resource.VerifiedAt = now;
-                break;
-        }
     }
 
     /// <summary>

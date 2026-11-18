@@ -249,6 +249,50 @@ internal static class EffectPins
         return pinned + "\n" + await RetiredAsync(server, runId!.Value);
     }
 
+    /// <summary>
+    /// What a guest's apply and verify record beside <see cref="GuestAsync"/>: every version of its own host key, which run
+    /// delivered and spent it, the container host keys pinned in the store, every version with its fingerprints, and the
+    /// configuration of the guest's services, whose setup a new machine proposes again.
+    /// </summary>
+    public static async Task<string> KeysAsync(ServerHarness server, Guid runId)
+    {
+        await using var scope = server.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<OctopushyDb>();
+        var store = scope.ServiceProvider.GetRequiredService<Octopushy.Server.Store.VariableStore>();
+        var run = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == runId);
+        var guest = await db.Resources.AsNoTracking().SingleAsync(r => r.Id == run.ResourceId);
+        string By(Guid? id) => id is null ? "-" : id == run.Id ? "this run" : "another";
+        var lines = new List<string>();
+        foreach (var key in await db.GuestHostKeys.AsNoTracking().Where(k => k.ResourceId == run.ResourceId).OrderBy(k => k.Version).ToListAsync())
+            lines.Add($"host key v{key.Version}: delivered by {By(key.DeliveredRunId)} at {key.DeliveredAt is not null} | spent by {By(key.SpentRunId)} at {key.SpentAt is not null}");
+        var name = Octopushy.Server.Store.ContainerHostKeys.Key(run.ResourceId);
+        var entry = await db.StoreEntries.AsNoTracking().SingleOrDefaultAsync(e => e.Key == name);
+        lines.Add(entry is null ? "container host keys: none" : $"container host keys: current v{entry.CurrentVersion} | latest v{entry.LatestVersion}");
+        foreach (var version in await db.StoreVersions.AsNoTracking().Where(v => v.Key == name).OrderBy(v => v.Version).ToListAsync())
+        {
+            var value = await store.GetVersionInternalAsync(name, version.Version, CancellationToken.None);
+            lines.Add($"container host keys v{version.Version}: revoked {version.RevokedAt is not null} | {value?.ReplaceLineEndings(" ").Trim() ?? "-"}");
+        }
+
+        foreach (var service in await db.Resources.AsNoTracking().Where(r => r.Kind == ResourceKinds.Service && r.ParentAddress == guest.Address)
+                     .OrderBy(r => r.Address).ToListAsync())
+        {
+            var configuration = await db.GuestConfigurations.AsNoTracking().SingleOrDefaultAsync(c => c.ResourceId == service.Id);
+            lines.Add($"service {service.Address}: proposed {configuration?.ProposedHash ?? "-"} | applied {configuration?.AppliedHash ?? "-"}");
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    /// <summary><see cref="DeliverWithGuestAsync"/>, followed by <see cref="KeysAsync"/>.</summary>
+    public static async Task<string> DeliverWithKeysAsync(ServerHarness server, FakeAgent agent, Assignment assignment, Outcome outcome, JsonObject? outputs,
+        string? error = null)
+    {
+        var pinned = await DeliverWithGuestAsync(server, agent, assignment, outcome, outputs, error);
+        var runId = await server.QueryAsync(db => db.Attempts.AsNoTracking().Where(a => a.Id == Guid.Parse(assignment.AttemptId)).Select(a => a.RunId).SingleAsync());
+        return pinned + "\n" + await KeysAsync(server, runId!.Value);
+    }
+
     /// <summary>A change id is new in every test.</summary>
     private static string Mask(string? text) =>
         text is null ? "-" : System.Text.RegularExpressions.Regex.Replace(text, "change [0-9a-f-]{36}", "change <id>");
