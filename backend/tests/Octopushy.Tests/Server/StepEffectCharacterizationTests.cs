@@ -79,10 +79,11 @@ internal static class EffectPins
     }
 
     /// <summary>Reports <paramref name="assignment"/> and advances, and pins what that did.</summary>
-    public static async Task<string> DeliverAsync(ServerHarness server, FakeAgent agent, Assignment assignment, Outcome outcome, JsonObject? outputs, string? error = null)
+    public static async Task<string> DeliverAsync(ServerHarness server, FakeAgent agent, Assignment assignment, Outcome outcome, JsonObject? outputs, string? error = null,
+        params Artifact[] artifacts)
     {
         var before = await RowsAsync(server);
-        var taken = await agent.ReportAsync(assignment, outcome, outputs?.DeepClone().AsObject(), error);
+        var taken = await agent.ReportAsync(assignment, outcome, outputs?.DeepClone().AsObject(), error, artifacts);
         await server.TickAsync();
         var runId = await server.QueryAsync(db => db.Attempts.AsNoTracking().Where(a => a.Id == Guid.Parse(assignment.AttemptId)).Select(a => a.RunId).SingleAsync());
         return $"taken: {taken}\n" + await PinAsync(server, runId!.Value) + "\n" + await AddedAsync(server, before);
@@ -173,11 +174,79 @@ internal static class EffectPins
 
     /// <summary><see cref="DeliverAsync"/>, followed by <see cref="GuestAsync"/>.</summary>
     public static async Task<string> DeliverWithGuestAsync(ServerHarness server, FakeAgent agent, Assignment assignment, Outcome outcome, JsonObject? outputs,
-        string? error = null)
+        string? error = null, params Artifact[] artifacts)
     {
-        var pinned = await DeliverAsync(server, agent, assignment, outcome, outputs, error);
+        var pinned = await DeliverAsync(server, agent, assignment, outcome, outputs, error, artifacts);
         var runId = await server.QueryAsync(db => db.Attempts.AsNoTracking().Where(a => a.Id == Guid.Parse(assignment.AttemptId)).Select(a => a.RunId).SingleAsync());
         return pinned + "\n" + await GuestAsync(server, runId!.Value);
+    }
+
+    /// <summary>
+    /// What a guest's plan records beside <see cref="GuestAsync"/>: the plan kept on its step, whole, and the approval after it,
+    /// with who decided and whether the hash it approves is the kept plan's digest.
+    /// </summary>
+    public static Task<string> PlanAsync(ServerHarness server, Guid runId) =>
+        server.QueryAsync(async db =>
+        {
+            var steps = await db.Steps.AsNoTracking().Where(s => s.RunId == runId && s.Stage == null).ToListAsync();
+            var plan = steps.Single(s => s.Name == StepNames.Plan);
+            var digest = plan.Outputs is null ? null : JsonNode.Parse(plan.Outputs)?["planSha256"]?.ToString();
+            var approval = steps.Single(s => s.Name == StepNames.Approval);
+            var approved = approval.PlanSha256 is null ? "-" : approval.PlanSha256 == digest ? "the plan's digest" : "another";
+            return $"plan: {plan.Outputs ?? "-"}\n"
+                   + $"approval: required {approval.ApprovalRequired} | decision {approval.Decision ?? "-"} by {approval.DecidedBy ?? "-"} at {approval.DecidedAt is not null}"
+                   + $" | hash {approved}";
+        });
+
+    /// <summary><see cref="DeliverWithGuestAsync"/>, followed by <see cref="PlanAsync"/>.</summary>
+    public static async Task<string> DeliverPlanAsync(ServerHarness server, FakeAgent agent, Assignment assignment, Outcome outcome, JsonObject? outputs,
+        string? error = null, params Artifact[] artifacts)
+    {
+        var pinned = await DeliverWithGuestAsync(server, agent, assignment, outcome, outputs, error, artifacts);
+        var runId = await server.QueryAsync(db => db.Attempts.AsNoTracking().Where(a => a.Id == Guid.Parse(assignment.AttemptId)).Select(a => a.RunId).SingleAsync());
+        return pinned + "\n" + await PlanAsync(server, runId!.Value);
+    }
+
+    /// <summary>
+    /// What retiring a guest leaves beside <see cref="GuestAsync"/>: the store entries and versions of its three credentials, its
+    /// access and host key rows, and every service, its own and others', with whether it is retired and its runs' statuses.
+    /// </summary>
+    public static Task<string> RetiredAsync(ServerHarness server, Guid runId) =>
+        server.QueryAsync(async db =>
+        {
+            var run = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == runId);
+            var id = run.ResourceId;
+            var lines = new List<string>();
+            foreach (var (name, key) in new[]
+                     {
+                         ("access", Octopushy.Server.Store.GuestAccessCredentials.Key(id)),
+                         ("host key", Octopushy.Server.Store.GuestHostCredentials.Key(id)),
+                         ("container host keys", Octopushy.Server.Store.ContainerHostKeys.Key(id)),
+                     })
+            {
+                lines.Add($"store {name}: entry {await db.StoreEntries.AsNoTracking().AnyAsync(e => e.Key == key)}"
+                          + $" | versions {await db.StoreVersions.AsNoTracking().CountAsync(v => v.Key == key)}");
+            }
+
+            lines.Add($"keys: access {await db.GuestAccessKeys.AsNoTracking().CountAsync(k => k.ResourceId == id)}"
+                      + $" | host {await db.GuestHostKeys.AsNoTracking().CountAsync(k => k.ResourceId == id)}");
+            foreach (var service in await db.Resources.AsNoTracking().Where(r => r.Kind == ResourceKinds.Service).OrderBy(r => r.Address).ToListAsync())
+            {
+                var runs = await db.Runs.AsNoTracking().Where(r => r.ResourceId == service.Id).OrderBy(r => r.CreatedAt).ToListAsync();
+                lines.Add($"service {service.Address}: retired {service.RetiredAt is not null} | runs "
+                          + string.Join(", ", runs.Select(r => $"{r.Status} ({Mask(r.Detail)})")));
+            }
+
+            return string.Join("\n", lines);
+        });
+
+    /// <summary><see cref="DeliverWithGuestAsync"/>, followed by <see cref="RetiredAsync"/>.</summary>
+    public static async Task<string> DeliverRetiredAsync(ServerHarness server, FakeAgent agent, Assignment assignment, Outcome outcome, JsonObject? outputs,
+        string? error = null)
+    {
+        var pinned = await DeliverWithGuestAsync(server, agent, assignment, outcome, outputs, error);
+        var runId = await server.QueryAsync(db => db.Attempts.AsNoTracking().Where(a => a.Id == Guid.Parse(assignment.AttemptId)).Select(a => a.RunId).SingleAsync());
+        return pinned + "\n" + await RetiredAsync(server, runId!.Value);
     }
 
     /// <summary>A change id is new in every test.</summary>
