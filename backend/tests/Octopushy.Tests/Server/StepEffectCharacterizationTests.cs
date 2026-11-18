@@ -138,6 +138,48 @@ internal static class EffectPins
         return pinned + "\n" + await AccessAsync(server, runId!.Value);
     }
 
+    /// <summary>
+    /// What a guest's machine steps record beside <see cref="PinAsync"/>: the run's operation, the hashes and revisions it marked,
+    /// the binding, the reservation, retirement and attachment, and the outputs it kept.
+    /// </summary>
+    public static Task<string> GuestAsync(ServerHarness server, Guid runId) =>
+        server.QueryAsync(async db =>
+        {
+            var run = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == runId);
+            var resource = await db.Resources.AsNoTracking().SingleAsync(r => r.Id == run.ResourceId);
+            string Hash(string? hash) => hash is null ? "-" : hash == run.InputsHash ? "this run's" : "another";
+            string Revision(Guid? revision) => revision is null ? "-" : revision == run.RevisionId ? "this run's" : "another";
+            return string.Join("\n",
+                $"operation: {run.Operation}",
+                $"guest: checked {Hash(resource.CheckedInputsHash)} {Revision(resource.CheckedRevisionId)} | applied {Hash(resource.AppliedInputsHash)}"
+                + $" {Revision(resource.AppliedRevisionId)} | synced {Hash(resource.SyncedInputsHash)} | outputs {resource.Outputs ?? "-"}",
+                $"guest: bound {resource.BoundInstallation ?? "-"} {resource.BoundVmid?.ToString() ?? "-"} at {resource.BoundAt is not null}"
+                + $" | reserved {resource.ReservedInstallation ?? "-"} {resource.ReservedNode ?? "-"} {resource.ReservedVmid?.ToString() ?? "-"}"
+                + $" at {resource.ReservedAt is not null} applied {resource.ReservationAppliedAt is not null}",
+                $"guest: retired {resource.RetiredAt is not null} | attached {resource.AttachedAt is not null} by {resource.AttachedBy ?? "-"}"
+                + $" | detached {resource.DetachedAt is not null} | waiting {resource.ProvisionWaiting ?? "-"}");
+        });
+
+    /// <summary>Every time a guest's machine steps set, exactly, to tell a second delivery that wrote them again.</summary>
+    public static Task<string> GuestTimesAsync(ServerHarness server, Guid resourceId) =>
+        server.QueryAsync(async db =>
+        {
+            var resource = await db.Resources.AsNoTracking().SingleAsync(r => r.Id == resourceId);
+            static string Time(DateTimeOffset? time) => time?.ToString("O") ?? "-";
+            return $"checked {Time(resource.CheckedAt)} | applied {Time(resource.AppliedAt)} | verified {Time(resource.VerifiedAt)}"
+                   + $" | bound {Time(resource.BoundAt)} | reservation applied {Time(resource.ReservationAppliedAt)} | retired {Time(resource.RetiredAt)}"
+                   + $" | attached {Time(resource.AttachedAt)}";
+        });
+
+    /// <summary><see cref="DeliverAsync"/>, followed by <see cref="GuestAsync"/>.</summary>
+    public static async Task<string> DeliverWithGuestAsync(ServerHarness server, FakeAgent agent, Assignment assignment, Outcome outcome, JsonObject? outputs,
+        string? error = null)
+    {
+        var pinned = await DeliverAsync(server, agent, assignment, outcome, outputs, error);
+        var runId = await server.QueryAsync(db => db.Attempts.AsNoTracking().Where(a => a.Id == Guid.Parse(assignment.AttemptId)).Select(a => a.RunId).SingleAsync());
+        return pinned + "\n" + await GuestAsync(server, runId!.Value);
+    }
+
     /// <summary>A change id is new in every test.</summary>
     private static string Mask(string? text) =>
         text is null ? "-" : System.Text.RegularExpressions.Regex.Replace(text, "change [0-9a-f-]{36}", "change <id>");
