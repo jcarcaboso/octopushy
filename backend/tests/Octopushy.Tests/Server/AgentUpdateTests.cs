@@ -686,6 +686,96 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
     }
 
     [Fact]
+    public async Task A_refused_commit_fails_the_update_only_once_another_change_to_its_guest_has_settled()
+    {
+        await using var setup = await StartAsync(Lab());
+        var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
+        await ProvisionAsync(setup, runner);
+        var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
+        var resource = await setup.Server.ResourceAsync(Guest);
+        // The remote refuses the update's push, once the test lets it answer.
+        var received = Path.Combine(setup.Remote.Root, "push-received");
+        var release = Path.Combine(setup.Remote.Root, "push-release");
+        var hook = Path.Combine(setup.Remote.Root, "hooks", "pre-receive");
+        File.WriteAllText(hook, $"#!/bin/sh\ncat >/dev/null\ntouch '{received}'\nwhile [ ! -e '{release}' ]; do sleep 0.1; done\nexit 1\n");
+        File.SetUnixFileMode(hook, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var request = setup.RequestAsync(worker.Id);
+        Assignment second;
+        try
+        {
+            for (var i = 0; i < 300 && !File.Exists(received); i++)
+                await Task.Delay(100);
+            Assert.True(File.Exists(received), "The update's push never reached the remote.");
+            // The worker is idle, so a setup of its guest asked for meanwhile goes out to the runner, and is still running.
+            second = await SetupRunningAsync(setup, runner, resource.Id);
+        }
+        finally
+        {
+            File.WriteAllText(release, "");
+        }
+
+        await request;
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+        // Refused, but failing would lift the pause while that setup may restart the agent.
+        Assert.Equal("updating", await setup.StateAsync(worker.Id));
+        Assert.True((await setup.RecordAsync(worker.Id)).Draining);
+
+        await runner.ReportAsync(second, Outcome.Succeeded, ConfigureRunTests.Recap());
+        await setup.Server.TickAsync();
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+        var record = await setup.RecordAsync(worker.Id);
+        Assert.Equal(AgentUpdateStates.Failed, record.UpdateState);
+        Assert.Equal(AgentUpdateFailures.CommitRefused, record.UpdateFailure);
+        Assert.False(record.Draining);
+    }
+
+    [Fact]
+    public async Task A_claim_a_stopped_server_left_fails_only_once_another_change_to_its_guest_has_settled()
+    {
+        await using var setup = await StartAsync(Lab());
+        var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
+        await ProvisionAsync(setup, runner);
+        var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
+        var resource = await setup.Server.ResourceAsync(Guest);
+        var second = await SetupRunningAsync(setup, runner, resource.Id);
+        // A server claimed the update, paused the worker and stopped before it recorded the change.
+        await setup.Server.WithDbAsync(db => db.Agents.Where(a => a.Id == worker.Id).ExecuteUpdateAsync(u => u
+            .SetProperty(a => a.UpdateState, AgentUpdateStates.Updating).SetProperty(a => a.UpdateResourceId, resource.Id)
+            .SetProperty(a => a.UpdateTargetVersion, Target).SetProperty(a => a.Draining, true).SetProperty(a => a.UpdatePaused, true)));
+
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+        Assert.Equal("updating", await setup.StateAsync(worker.Id));
+        Assert.True((await setup.RecordAsync(worker.Id)).Draining);
+
+        await runner.ReportAsync(second, Outcome.Succeeded, ConfigureRunTests.Recap());
+        await setup.Server.TickAsync();
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+        var record = await setup.RecordAsync(worker.Id);
+        Assert.Equal(AgentUpdateStates.Failed, record.UpdateState);
+        Assert.Equal(AgentUpdateFailures.ChangeNotRecorded, record.UpdateFailure);
+        Assert.False(record.Draining);
+    }
+
+    /// <summary>Asks for a setup of the guest and hands it to <paramref name="runner"/> up to its playbook, left running.</summary>
+    private static async Task<Assignment> SetupRunningAsync(Setup setup, FakeAgent runner, Guid resourceId)
+    {
+        (await setup.Client.PostAsJsonAsync($"/api/guests/{resourceId}/configure", new { action = "setup" })).EnsureSuccessStatusCode();
+        Assignment? playbook = null;
+        await WorkAsync(setup, runner, approve: true, stop: a =>
+        {
+            if (a is not { Executor: "ansible", Action: "run" })
+                return false;
+            playbook = a;
+            return true;
+        });
+        Assert.NotNull(playbook);
+        return playbook;
+    }
+
+    [Fact]
     public async Task A_lost_executor_fails_the_update_though_another_change_to_the_guest_goes_out_after_the_new_hello()
     {
         await using var setup = await StartAsync(Lab());

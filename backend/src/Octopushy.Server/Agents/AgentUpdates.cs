@@ -436,9 +436,16 @@ public sealed class AgentUpdates(
                 return (Guid?)null;
             if (agent.UpdateChangeId is null && !committing.ContainsKey(agent.Id))
             {
-                // Claimed by a server that stopped before it recorded the change: nothing else would ever end it.
-                await FailAsync(db, agent, AgentUpdateFailures.ChangeNotRecorded,
-                    "The server stopped before the update's change was recorded. Look for its commit in the lab repository, then ask again.", ct);
+                // Its commit was refused, or the server stopped before it recorded the change: nothing else would ever end it.
+                // Failing lifts the pause, so not while another change to its guest may still restart the agent; the refusal
+                // waits on the record meanwhile.
+                if (await GuestChangingAsync(db, agent, ct))
+                    return null;
+                if (agent.UpdateFailure is { } refused)
+                    await FailAsync(db, agent, refused, agent.UpdateDetail ?? "", ct);
+                else
+                    await FailAsync(db, agent, AgentUpdateFailures.ChangeNotRecorded,
+                        "The server stopped before the update's change was recorded. Look for its commit in the lab repository, then ask again.", ct);
                 await db.SaveChangesAsync(ct);
                 return null;
             }
@@ -655,6 +662,13 @@ public sealed class AgentUpdates(
                 {
                     agent.UpdateChangeId = change.Id;
                     logger.LogInformation("Agent {Name} is being updated to {Version} by change {Change}.", agent.Name, claimed.Version, change.Id);
+                }
+                else if (await GuestChangingAsync(db, agent, CancellationToken.None))
+                {
+                    // Failing lifts the pause: kept, with why, until no change to its guest may still restart the agent. The next
+                    // pass that finds it so fails it (AdvanceAsync).
+                    agent.UpdateFailure = AgentUpdateFailures.CommitRefused;
+                    agent.UpdateDetail = refused;
                 }
                 else
                     await FailAsync(db, agent, AgentUpdateFailures.CommitRefused, refused!, CancellationToken.None);
