@@ -197,44 +197,73 @@ public sealed partial class RunEngine
             configuration.Snapshot = prepared.ToJsonString();
     }
 
-    /// <summary>What each finished step of a rotation shows. A change is recorded when a login has shown it, not when it was asked for.</summary>
-    private async Task ApplyRotationEffectsAsync(OctopushyDb db, Run run, Step step, JsonNode? outputs, DateTimeOffset now, CancellationToken cancellationToken)
+    // What each finished step of a rotation shows, one effect per step. A change is recorded when a login has shown it, not when it
+    // was asked for.
+
+    /// <summary>The run's rotation, and every access key of its guest, tracked: what a rotation's effects read and write.</summary>
+    private static async Task<(AccessRotationContext Rotation, List<GuestAccessKey> Keys)> RotationKeysAsync(OctopushyDb db, Run run,
+        CancellationToken cancellationToken)
     {
         var rotation = RunContext.Parse(run.Context).AccessRotation!;
         var keys = await db.GuestAccessKeys.Where(k => k.ResourceId == run.ResourceId).ToListAsync(cancellationToken);
-        switch (step.Name)
+        return (rotation, keys);
+    }
+
+    /// <summary><see cref="StepNames.AuthorizeKey"/>: the key in use added the candidate to the guest.</summary>
+    private sealed class AuthorizeKeyEffect : IStepEffect
+    {
+        public async Task ApplyAsync(RunEngine engine, OctopushyDb db, VariableStore store, Run run, Step step, Resource resource, JsonNode? outputs,
+            DateTimeOffset now, CancellationToken cancellationToken)
         {
-            case StepNames.AuthorizeKey:
-                keys.Single(k => k.Version == rotation.Candidate).AuthorizedAt = now;
-                break;
-            case StepNames.VerifyCurrent or StepNames.VerifyKey:
-                var verified = keys.Single(k => k.Version == (step.Name == StepNames.VerifyKey ? rotation.Candidate : rotation.Current));
-                verified.VerifiedAt = now;
-                verified.VerifiedRunId = run.Id;
-                break;
-            case StepNames.ConfirmRefused:
-                // Only sshd refusing them counts. Until then they stay on the list, so a later
-                // rotation looks again, and takes off whatever is still there.
-                if (outputs?["refusedKeys"]?.GetValue<int>() != rotation.Remove.Count)
-                {
-                    step.Status = StepStatuses.Failed;
-                    step.Detail = "Nothing showed sshd refusing every old key.";
-                    if (step.Attempts.MaxBy(a => a.Number) is { } attempt)
-                    {
-                        attempt.Status = AttemptStatuses.Failed;
-                        attempt.Error = step.Detail;
-                    }
+            var (rotation, keys) = await RotationKeysAsync(db, run, cancellationToken);
+            keys.Single(k => k.Version == rotation.Candidate).AuthorizedAt = now;
+        }
+    }
 
-                    return;
+    /// <summary>
+    /// <see cref="StepNames.VerifyCurrent"/> and <see cref="StepNames.VerifyKey"/>: a fresh login with one key alone, the key in use
+    /// or the candidate, worked. A person's promotion of the candidate rests on what this records.
+    /// </summary>
+    private sealed class VerifyLoginEffect : IStepEffect
+    {
+        public async Task ApplyAsync(RunEngine engine, OctopushyDb db, VariableStore store, Run run, Step step, Resource resource, JsonNode? outputs,
+            DateTimeOffset now, CancellationToken cancellationToken)
+        {
+            var (rotation, keys) = await RotationKeysAsync(db, run, cancellationToken);
+            var verified = keys.Single(k => k.Version == (step.Name == StepNames.VerifyKey ? rotation.Candidate : rotation.Current));
+            verified.VerifiedAt = now;
+            verified.VerifiedRunId = run.Id;
+        }
+    }
+
+    /// <summary><see cref="StepNames.ConfirmRefused"/>: the old keys are removed, and their versions revoked, once sshd refused every one.</summary>
+    private sealed class ConfirmRefusedEffect : IStepEffect
+    {
+        public async Task ApplyAsync(RunEngine engine, OctopushyDb db, VariableStore store, Run run, Step step, Resource resource, JsonNode? outputs,
+            DateTimeOffset now, CancellationToken cancellationToken)
+        {
+            var (rotation, keys) = await RotationKeysAsync(db, run, cancellationToken);
+            // Only sshd refusing them counts. Until then they stay on the list, so a later
+            // rotation looks again, and takes off whatever is still there.
+            if (outputs?["refusedKeys"]?.GetValue<int>() != rotation.Remove.Count)
+            {
+                step.Status = StepStatuses.Failed;
+                step.Detail = "Nothing showed sshd refusing every old key.";
+                if (step.Attempts.MaxBy(a => a.Number) is { } attempt)
+                {
+                    attempt.Status = AttemptStatuses.Failed;
+                    attempt.Error = step.Detail;
                 }
 
-                foreach (var removed in keys.Where(k => rotation.Remove.Contains(k.Version)))
-                {
-                    removed.RemovedAt = now;
-                }
+                return;
+            }
 
-                await GuestAccessCredentials.RevokeRemovedAsync(db, run.ResourceId, rotation, now, cancellationToken);
-                break;
+            foreach (var removed in keys.Where(k => rotation.Remove.Contains(k.Version)))
+            {
+                removed.RemovedAt = now;
+            }
+
+            await GuestAccessCredentials.RevokeRemovedAsync(db, run.ResourceId, rotation, now, cancellationToken);
         }
     }
 

@@ -26,6 +26,10 @@ public sealed partial class RunEngine
     {
         [StepNames.Playbook] = new PlaybookEffect(),
         [StepNames.PlaybookApproved] = new PlaybookEffect(),
+        [StepNames.VerifyCurrent] = new VerifyLoginEffect(),
+        [StepNames.AuthorizeKey] = new AuthorizeKeyEffect(),
+        [StepNames.VerifyKey] = new VerifyLoginEffect(),
+        [StepNames.ConfirmRefused] = new ConfirmRefusedEffect(),
     };
 
     /// <summary>The effect of <paramref name="name"/>, matched exactly; null for a step type without one, or a name no step has.</summary>
