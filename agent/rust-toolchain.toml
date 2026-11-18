@@ -3,4 +3,4 @@
 # image has none, and listing them would make the image build download them. CI adds rustfmt
 # and clippy itself.
 [toolchain]
-channel = "1.98.1"
+channel = "1.100.0"
