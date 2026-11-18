@@ -542,7 +542,7 @@ pub fn sweep(dirs: &[PathBuf], kept: &[PathBuf], uid: u32) {
                 return;
             }
             let path = entry.path();
-            if kept.iter().any(|k| *k == path) {
+            if kept.contains(&path) {
                 continue;
             }
             let Ok(meta) = fs::symlink_metadata(&path) else {
@@ -853,7 +853,7 @@ mod tests {
         std::os::unix::fs::symlink("/", shared.join("link")).unwrap();
         // Someone else's files would be left; here everything is this user's, so `other` goes
         // with what is in it, and only the kept folder stays.
-        sweep(&[shared.clone()], &[shared.join("state")], me);
+        sweep(std::slice::from_ref(&shared), &[shared.join("state")], me);
         let left: Vec<_> = fs::read_dir(&shared)
             .unwrap()
             .map(|e| e.unwrap().file_name())
@@ -861,7 +861,7 @@ mod tests {
         assert_eq!(left, ["state"]);
         assert!(shared.join("state/work/a/plan.bin").exists());
         // A user with nothing there removes nothing.
-        sweep(&[shared.clone()], &[], 4_000_009);
+        sweep(std::slice::from_ref(&shared), &[], 4_000_009);
         assert!(shared.join("state/work/a/plan.bin").exists());
     }
 

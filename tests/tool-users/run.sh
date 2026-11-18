@@ -38,7 +38,14 @@ if [[ -n ${AGENT_IMAGE:-} ]]; then
     [ -z "$extra" ] || { echo "folders everyone can write to: $extra" >&2; exit 1; }
     # Setuid and setgid programs are harmless under no_new_privs; listed for the record.
     find / -xdev \( -path /proc -o -path /sys \) -prune -o -type f -perm /6000 -print
-    octopushy agent doctor --tool-runtime local | sed -n 1,3p
+    # Probes run as nobody (Nix as the store owner): each tool must still answer. Nix may lack the
+    # free space it asks for, so only its probe is looked at.
+    out=$(octopushy agent doctor --tool-runtime local || true)
+    printf "%s\n" "$out"
+    for tool in opentofu ansible; do
+      printf "%s\n" "$out" | grep -q "^$tool *available" || { echo "$tool is not available" >&2; exit 1; }
+    done
+    printf "%s\n" "$out" | grep -qE "^nix *(available|UNAVAILABLE: the Nix store has)" || { echo "nix does not run" >&2; exit 1; }
   '
 fi
 echo "ok"

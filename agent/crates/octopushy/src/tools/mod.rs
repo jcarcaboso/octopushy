@@ -959,15 +959,33 @@ async fn drain<A, B>(
 /// it takes longer. Its stderr is never kept: an error names the program and how it exited.
 async fn version_line(bin: &Path, args: &[&str], user: Option<ToolUser>) -> Result<String> {
     let mut cmd = Command::new(bin);
+    let mut home = None;
     if let Some(user) = user {
         user.apply(&mut cmd);
-        // Nothing of the agent's environment, as for a tool.
-        cmd.env_clear();
+        // Nothing of the agent's environment, as for a tool, and a home of its own for the run:
+        // Ansible makes `~/.ansible` even to print its version.
+        let dir = Path::new(PROBE_HOMES).join(user.uid.to_string());
+        users::agent_dir(Path::new(PROBE_HOMES))
+            .and_then(|()| users::private_dir(&dir, user))
+            .context("making a home for the probe")?;
+        cmd.env_clear().env("HOME", &dir);
         if let Some(path) = std::env::var_os("PATH") {
             cmd.env("PATH", path);
         }
         cmd.current_dir("/");
+        home = Some(dir);
     }
+    let result = version_output(cmd, bin, args).await;
+    if let Some(home) = home {
+        let _ = std::fs::remove_dir_all(home);
+    }
+    result
+}
+
+/// Where probes that run as another user get a home of their own.
+const PROBE_HOMES: &str = "/tmp/octopushy-probes";
+
+async fn version_output(mut cmd: Command, bin: &Path, args: &[&str]) -> Result<String> {
     let out = cmd
         .args(args)
         .stdin(Stdio::null())
