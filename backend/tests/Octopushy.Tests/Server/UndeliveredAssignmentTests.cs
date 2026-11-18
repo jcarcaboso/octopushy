@@ -1,4 +1,6 @@
+using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Octopushy.Agent.V1;
 using Octopushy.Server.Agents;
@@ -268,6 +270,90 @@ public class UndeliveredAssignmentTests(PostgresFixture postgres) : IClassFixtur
     }
 
     [Fact]
+    public async Task A_read_its_agents_next_Hello_queued_again_is_not_handed_to_the_earlier_connection_a_second_time()
+    {
+        var pause = new PauseRequeue();
+        await using var server = await ServerHarness.StartAsync(postgres,
+            services: s => s.ConfigureDbContext<OctopushyDb>(options => options.AddInterceptors(pause)));
+        var agent = await server.ConnectAgentAsync("home");
+        var connections = server.Services.GetRequiredService<AgentConnections>();
+        connections.Disconnect(agent.Id);
+        await server.SyncAndTrustAsync();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var old = new AgentStream
+        {
+            OnWrite = m => m.ResultAck is not null ? Block(entered, release) : Task.CompletedTask,
+        };
+        var oldConnection = await ConnectAsync(server, agent, old, Hello([TofuStateStore.AgentCapability]));
+        Assert.True(connections.Get(agent.Id)!.TrySend(new ServerMessage { ResultAck = new ResultAck { AttemptId = "x" } }));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await server.TickAsync();
+        var preview = await PreviewAsync(server);
+        Assert.Equal(AttemptStatuses.Assigned, preview.Status);
+        var first = (await ReleasesAsync(server, preview.Id)).Select(r => r.Id).ToList();
+        Assert.NotEmpty(first);
+
+        // The newer connection's Hello is held while it queues the read again, and a dispatch waits behind it.
+        pause.Armed = true;
+        var fresh = new AgentStream();
+        fresh.Send(new AgentMessage { Hello = Hello([TofuStateStore.AgentCapability]) });
+        var service = ActivatorUtilities.CreateInstance<AgentChannelService>(server.Services);
+        _ = service.Connect(fresh, fresh, await AgentStream.CallAsAsync(server, agent));
+        await pause.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var dispatch = server.Engine.DispatchAsync(CancellationToken.None);
+        await Task.Delay(300);
+        Assert.False(dispatch.IsCompleted);
+        pause.Release.SetResult();
+        await dispatch.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // That dispatch found the earlier connection closed already: the read went to the newer one, once.
+        Assert.Equal(preview.Id.ToString(), (await NextAssignmentAsync(fresh)).AttemptId);
+        var second = (await ReleasesAsync(server, preview.Id)).Select(r => r.Id).Except(first).ToList();
+        Assert.NotEmpty(second);
+        release.SetResult();
+        await oldConnection.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(second, (await ReleasesAsync(server, preview.Id)).Select(r => r.Id).ToList());
+        preview = await PreviewAsync(server);
+        Assert.Equal((AttemptStatuses.Assigned, 1), (preview.Status, preview.Number));
+        Assert.DoesNotContain(Drain(old), m => m.Assignment is not null);
+    }
+
+    [Theory]
+    [InlineData("query")]
+    [InlineData("save")]
+    public async Task What_was_never_written_is_taken_back_by_a_later_pass_when_taking_it_back_failed(string failing)
+    {
+        var failure = new TakeBackFails(failing);
+        await using var server = await ServerHarness.StartAsync(postgres,
+            services: s => s.ConfigureDbContext<OctopushyDb>(options => options.AddInterceptors(failure, failure.Saves)));
+        var agent = await server.ConnectAgentAsync("home");
+        server.Services.GetRequiredService<AgentConnections>().Disconnect(agent.Id);
+        await server.SyncAndTrustAsync();
+        var held = await ConnectHeldAtWelcomeAsync(server, agent, [TofuStateStore.AgentCapability]);
+        await server.TickAsync();
+        var preview = await PreviewAsync(server);
+        Assert.Equal(AttemptStatuses.Assigned, preview.Status);
+        var released = (await ReleasesAsync(server, preview.Id)).Select(r => r.Id).ToList();
+        Assert.NotEmpty(released);
+
+        // The session closes, and taking back what it never wrote fails: nothing is changed, and nothing is forgotten.
+        failure.Armed = true;
+        await held.DropAsync();
+        Assert.False(failure.Armed);
+        Assert.Equal(AttemptStatuses.Assigned, (await PreviewAsync(server)).Status);
+        Assert.Equal(released, (await ReleasesAsync(server, preview.Id)).Select(r => r.Id).ToList());
+
+        // The next pass does it.
+        await server.TickAsync();
+        preview = await PreviewAsync(server);
+        Assert.Equal((AttemptStatuses.Queued, 1), (preview.Status, preview.Number));
+        Assert.Empty(await ReleasesAsync(server, preview.Id));
+        Assert.False(server.Services.GetRequiredService<RunEngine>().KeepsHandOff(preview.Id));
+    }
+
+    [Fact]
     public async Task A_change_put_back_has_its_plan_checked_again()
     {
         var (server, agent, _) = await ApprovedAsync();
@@ -379,6 +465,65 @@ public class UndeliveredAssignmentTests(PostgresFixture postgres) : IClassFixtur
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.NotNull(server.Services.GetRequiredService<AgentConnections>().Get(agent.Id));
         return new HeldConnection(connection, welcome);
+    }
+
+    /// <summary>Holds the save by which a Hello queues a read again, once, until released.</summary>
+    private sealed class PauseRequeue : SaveChangesInterceptor
+    {
+        public bool Armed { get; set; }
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (Armed && eventData.Context!.ChangeTracker.Entries<Attempt>()
+                    .Any(e => e.State == EntityState.Modified && e.Entity.Status == AttemptStatuses.Queued))
+            {
+                Armed = false;
+                Entered.TrySetResult();
+                await Release.Task;
+            }
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Fails, once, the taking back of what a hand-off recorded: the read of its release rows ("query"), or the save that
+    /// removes them ("save").
+    /// </summary>
+    private sealed class TakeBackFails(string what) : DbCommandInterceptor
+    {
+        public bool Armed { get; set; }
+
+        private string What { get; } = what;
+
+        public SaveChangesInterceptor Saves => new FailingSave(this);
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData,
+            InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            if (!Armed || What != "query" || !command.CommandText.Contains("FROM secret_resolutions"))
+                return ValueTask.FromResult(result);
+            Armed = false;
+            throw new InvalidOperationException("The release rows could not be read.");
+        }
+
+        private sealed class FailingSave(TakeBackFails owner) : SaveChangesInterceptor
+        {
+            public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+                DbContextEventData eventData,
+                InterceptionResult<int> result, CancellationToken cancellationToken = default)
+            {
+                if (!owner.Armed || owner.What != "save"
+                    || !eventData.Context!.ChangeTracker.Entries<SecretResolution>().Any(e => e.State == EntityState.Deleted))
+                    return ValueTask.FromResult(result);
+                owner.Armed = false;
+                throw new InvalidOperationException("The taking back could not be saved.");
+            }
+        }
     }
 
     /// <summary>Has the engine look for hand-off records of no more use at every pass, and not once in so many hand-offs.</summary>

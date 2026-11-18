@@ -488,13 +488,13 @@ public class AgentAvailabilityTests(PostgresFixture postgres) : IClassFixture<Po
         // A registration that is cancelled registers nothing and stores nothing: the older connection is still the agent's.
         var cancelled = Newer("never registered");
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            server.Engine.RegisterAsync(cancelled, () => connections.Add(cancelled), new CancellationToken(canceled: true)));
+            server.Engine.RegisterAsync(cancelled, new Hello(), () => connections.Add(cancelled), new CancellationToken(canceled: true)));
         Assert.Same(old, connections.Get(agent.Id));
         Assert.Equal("the older connection's", Assert.Single(AgentAvailability.Deserialize(await StoredAsync())).Value);
 
         // One that completes leaves the record the newer connection's, whatever was stored before.
         var current = Newer("the newer connection's");
-        await server.Engine.RegisterAsync(current, () => connections.Add(current), CancellationToken.None);
+        await server.Engine.RegisterAsync(current, new Hello(), () => connections.Add(current), CancellationToken.None);
         Assert.Same(current, connections.Get(agent.Id));
         Assert.Equal("the newer connection's", Assert.Single(AgentAvailability.Deserialize(await StoredAsync())).Value);
         Assert.Equal(["opentofu", "proxmox"], await server.QueryAsync(db => db.Agents.Where(a => a.Id == agent.Id).Select(a => a.Executors).SingleAsync()));

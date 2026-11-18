@@ -130,10 +130,10 @@ public sealed class AgentChannelService(
         var handler = Task.CompletedTask;
         try
         {
-            await engine.OnHelloAsync(agent.Id, hello, call.Token);
-            // Registered under the engine's gate together with its offer: a connection it replaces may have stored its own
-            // since the Hello's, and stores nothing once this one is the agent's.
-            await engine.RegisterAsync(session, () => connections.Add(session), call.Token);
+            // Its Hello is settled and it is registered in one step under the engine's gate, together with its offer: a
+            // connection it replaces is closed before anything is dispatched again, may have stored its own offer since the
+            // Hello's, and stores nothing once this one is the agent's.
+            await engine.RegisterAsync(session, hello, () => connections.Add(session), call.Token);
             reachability.OnConnected(session);
             logger.LogInformation("Agent {Name} ({Agent}) connected, version {Version}.", agent.Name, agent.Id, hello.AgentVersion);
             await responseStream.WriteAsync(new ServerMessage

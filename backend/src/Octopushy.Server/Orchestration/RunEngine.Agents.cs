@@ -363,14 +363,20 @@ public sealed partial class RunEngine
     /// An assignment put on a session's queue, with what was recorded for it: the secrets released and the reservation made.
     /// The session is the one it was handed to: only that session can say it never wrote it.
     /// </summary>
-    private sealed record HandOff(AgentSession Session, long Number, long[] Releases, ReservationChange? Reservation);
+    private sealed record HandOff(AgentSession Session, long Number, long[] Releases, ReservationChange? Reservation)
+    {
+        /// <summary>Its session closed and said it never wrote it. What it recorded is still to be taken back.</summary>
+        public bool NeverWritten { get; set; }
+    }
 
     // Protected by the gate. In memory only: after a restart nothing is put back, and a lost assignment is decided by its lease.
     // By attempt and session: a read its agent's next Hello queued again can be handed off anew before the session that never
     // wrote it has closed, and that session's record must still be there to take back what it recorded.
-    // Nothing an agent says removes a record: one goes when its session says it never wrote it, or once it is of no more use
-    // (PruneHandOffsAsync). So while an attempt is assigned and not started, the hand-off it is assigned by has its record,
-    // and that is the one with the highest number.
+    // Nothing an agent says removes a record: one goes when its session says it never wrote it and what it recorded has been
+    // taken back, or once it is of no more use (PruneHandOffsAsync). So while an attempt is assigned and not started, the
+    // hand-off it is assigned by has its record, and that is the one with the highest number.
+    // A session is handed an attempt at most once: only a Hello queues an assigned attempt again, and it does so in the step
+    // that closes the agent's earlier session (RegisterAsync).
     private readonly Dictionary<(Guid Attempt, Guid Session), HandOff> _handOffs = [];
     private long _handOffNumber;
     private int _handOffsAfterPrune;
@@ -454,33 +460,70 @@ public sealed partial class RunEngine
     public Task OnSessionClosedAsync(Guid agentId, Guid sessionId, IReadOnlyList<Guid> attemptIds, CancellationToken cancellationToken) =>
         WithDbAsync(async db =>
         {
-            var (cleaned, requeued) = (0, 0);
-            foreach (var attemptId in attemptIds.Distinct())
+            // Noted first, in memory: if taking back fails below, a later pass does it (TakeBackNeverWrittenAgainAsync).
+            foreach (var attemptId in attemptIds)
             {
-                if (!_handOffs.Remove((attemptId, sessionId), out var handOff) || handOff.Session.AgentId != agentId)
-                    continue;
-                // Never written: the secrets this hand-off recorded as released were not, whatever became of the attempt since.
-                // A read may already be queued again by its agent's next Hello, or handed off anew.
-                db.SecretResolutions.RemoveRange(await db.SecretResolutions.Where(r => handOff.Releases.Contains(r.Id)).ToListAsync(cancellationToken));
-                cleaned++;
-                // The attempt itself goes back only while this hand-off is still the one it is assigned by. A later record says
-                // it was handed off again since, and that one may have been written.
-                if (_handOffs.Any(other => other.Key.Attempt == attemptId && other.Value.Number > handOff.Number))
-                    continue;
-                var attempt = await db.Attempts.Include(a => a.Step)
-                    .FirstOrDefaultAsync(a => a.Id == attemptId && a.AgentId == agentId, cancellationToken);
-                if (attempt is not { Status: AttemptStatuses.Assigned, StartedAt: null })
-                    continue;
-                await UndoHandOffAsync(db, attempt, handOff, cancellationToken);
-                logger.LogInformation("The assignment of attempt {Attempt} was never written to agent {Agent}; it is queued again.", attemptId, agentId);
-                requeued++;
+                if (_handOffs.TryGetValue((attemptId, sessionId), out var handOff) && handOff.Session.AgentId == agentId)
+                    handOff.NeverWritten = true;
             }
-
-            if (cleaned > 0)
-                await db.SaveChangesAsync(cancellationToken);
-            if (requeued > 0)
-                signal.Wake();
+            await TakeBackNeverWrittenAsync(db, cancellationToken);
         }, cancellationToken);
+
+    /// <summary>
+    /// Takes back what every hand-off noted as never written recorded, in one save, and retires their records only once that
+    /// save succeeded. Safe to run again after a failure, whatever the failed save did: rows already gone are not found, an
+    /// attempt already queued is left, and a reservation is restored only while it is still what the hand-off made it.
+    /// </summary>
+    private async Task TakeBackNeverWrittenAsync(OctopushyDb db, CancellationToken cancellationToken)
+    {
+        var neverWritten = _handOffs.Where(h => h.Value.NeverWritten).OrderBy(h => h.Value.Number).ToList();
+        if (neverWritten.Count == 0)
+            return;
+        var requeued = 0;
+        foreach (var (key, handOff) in neverWritten)
+        {
+            // Never written: the secrets this hand-off recorded as released were not, whatever became of the attempt since.
+            // A read may already be queued again by its agent's next Hello, or handed off anew.
+            db.SecretResolutions.RemoveRange(await db.SecretResolutions.Where(r => handOff.Releases.Contains(r.Id)).ToListAsync(cancellationToken));
+            // The attempt itself goes back only while this hand-off is still the one it is assigned by. A later record says
+            // it was handed off again since, and that one may have been written, or goes back itself.
+            if (_handOffs.Any(other => other.Key.Attempt == key.Attempt && other.Value.Number > handOff.Number))
+                continue;
+            var agentId = handOff.Session.AgentId;
+            var attempt = await db.Attempts.Include(a => a.Step)
+                .FirstOrDefaultAsync(a => a.Id == key.Attempt && a.AgentId == agentId, cancellationToken);
+            if (attempt is not { Status: AttemptStatuses.Assigned, StartedAt: null })
+                continue;
+            await UndoHandOffAsync(db, attempt, handOff, cancellationToken);
+            logger.LogInformation("The assignment of attempt {Attempt} was never written to agent {Agent}; it is queued again.", key.Attempt, agentId);
+            requeued++;
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        foreach (var (key, _) in neverWritten)
+            _handOffs.Remove(key);
+        if (requeued > 0)
+            signal.Wake();
+    }
+
+    /// <summary>
+    /// Tries again what a closed session's taking back could not save, each pass until it is saved. With its own context, so
+    /// that a failure here leaves nothing behind in the pass's.
+    /// </summary>
+    private async Task TakeBackNeverWrittenAgainAsync(CancellationToken cancellationToken)
+    {
+        if (!_handOffs.Values.Any(h => h.NeverWritten))
+            return;
+        try
+        {
+            await using var scope = scopes.CreateAsyncScope();
+            await TakeBackNeverWrittenAsync(scope.ServiceProvider.GetRequiredService<OctopushyDb>(), cancellationToken);
+        }
+        catch (Exception e) when (e is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogError(e, "Taking back what was recorded for assignments never written failed again; the next pass tries.");
+        }
+    }
 
     private async Task FailUnsentAttemptAsync(Guid attemptId, Exception error, CancellationToken cancellationToken)
     {
@@ -626,27 +669,33 @@ public sealed partial class RunEngine
     public Task OnHelloAsync(Guid agentId, Hello hello, CancellationToken cancellationToken) =>
         WithDbAsync(async db =>
         {
-            var running = hello.RunningAttemptIds.Select(Guid.Parse).ToHashSet();
-            var mine = await db.Attempts
-                .Where(a => a.AgentId == agentId && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running))
-                .ToListAsync(cancellationToken);
-            foreach (var attempt in mine)
-            {
-                if (running.Contains(attempt.Id))
-                {
-                    attempt.LeaseExpiresAt = clock.GetUtcNow().AddSeconds(options.Value.AgentChannel.LeaseSeconds);
-                }
-                else if (attempt.Status == AttemptStatuses.Assigned && !attempt.Mutating)
-                {
-                    // The agent reconnected without it. A read-only action is safe to assign again;
-                    // a change may have run with its start lost, so it waits for its result or its lease.
-                    Requeue(attempt, "The agent reconnected without this attempt; it will be reassigned.");
-                }
-            }
-
-            await db.SaveChangesAsync(cancellationToken);
+            await ReconcileHelloAsync(db, agentId, hello, cancellationToken);
             signal.Wake();
         }, cancellationToken);
+
+    /// <summary>What a Hello settles about the attempts its agent holds: leases renewed, and reads it does not have queued again.</summary>
+    private async Task ReconcileHelloAsync(OctopushyDb db, Guid agentId, Hello hello, CancellationToken cancellationToken)
+    {
+        var running = hello.RunningAttemptIds.Select(Guid.Parse).ToHashSet();
+        var mine = await db.Attempts
+            .Where(a => a.AgentId == agentId && (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running))
+            .ToListAsync(cancellationToken);
+        foreach (var attempt in mine)
+        {
+            if (running.Contains(attempt.Id))
+            {
+                attempt.LeaseExpiresAt = clock.GetUtcNow().AddSeconds(options.Value.AgentChannel.LeaseSeconds);
+            }
+            else if (attempt.Status == AttemptStatuses.Assigned && !attempt.Mutating)
+            {
+                // The agent reconnected without it. A read-only action is safe to assign again;
+                // a change may have run with its start lost, so it waits for its result or its lease.
+                Requeue(attempt, "The agent reconnected without this attempt; it will be reassigned.");
+            }
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+    }
 
     /// <summary>How often a changing offer is logged, woken for and stored, per connection: the engine ticks this often anyway.</summary>
     public static readonly TimeSpan OfferEffectsEvery = TimeSpan.FromSeconds(5);
@@ -672,17 +721,23 @@ public sealed partial class RunEngine
         WithDbAsync(db => ApplyOfferEffectsAsync(db, session, cancellationToken), cancellationToken);
 
     /// <summary>
-    /// Makes <paramref name="session"/> its agent's connection and stores what it offers, as one step under the engine's gate:
-    /// the offer first, then <paramref name="register"/>, with nothing in between that can be cancelled. An older connection
-    /// of the agent may have stored its own offer since this one's Hello did; after this the record is this connection's, and
-    /// the older one stores nothing more (see <see cref="ApplyOfferEffectsAsync"/>). If the write fails or is cancelled, the
-    /// connection is not registered.
+    /// Makes <paramref name="session"/> its agent's connection, as one step under the engine's gate: what its Hello settles
+    /// about the attempts the agent holds and what it offers are stored together, then <paramref name="register"/>, with
+    /// nothing in between that can be cancelled. Nothing is dispatched between a read being queued again and the earlier
+    /// connection closing, so that read cannot be handed to the earlier connection a second time. An older connection of
+    /// the agent may have stored its own offer since this one's Hello did; after this the record is this connection's, and
+    /// the older one stores nothing more (see <see cref="ApplyOfferEffectsAsync"/>). If a write fails or is cancelled,
+    /// neither is stored and the connection is not registered.
     /// </summary>
-    public Task RegisterAsync(AgentSession session, Action register, CancellationToken cancellationToken) =>
+    public Task RegisterAsync(AgentSession session, Hello hello, Action register, CancellationToken cancellationToken) =>
         WithDbAsync(async db =>
         {
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+            await ReconcileHelloAsync(db, session.AgentId, hello, cancellationToken);
             await WriteOfferAsync(db, session, cancellationToken);
+            await transaction.CommitAsync(CancellationToken.None);
             register();
+            signal.Wake();
         }, cancellationToken);
 
     private static Task WriteOfferAsync(OctopushyDb db, AgentSession session, CancellationToken cancellationToken)
@@ -1014,6 +1069,7 @@ public sealed partial class RunEngine
 
     private async Task ExpireLeasesAsync(OctopushyDb db, CancellationToken cancellationToken)
     {
+        await TakeBackNeverWrittenAgainAsync(cancellationToken);
         await PruneHandOffsAsync(db, cancellationToken);
         var now = clock.GetUtcNow();
         var expired = await db.Attempts.Include(a => a.Step).ThenInclude(s => s!.Attempts)
