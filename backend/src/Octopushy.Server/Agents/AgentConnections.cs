@@ -128,7 +128,19 @@ public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string
     public ChannelReader<ServerMessage> Outbound => _outbound.Reader;
 
     /// <summary>Nonblocking hand-off, so credential revocation can serialize with dispatch.</summary>
-    public bool TrySend(ServerMessage message) => _outbound.Writer.TryWrite(message);
+    public bool TrySend(ServerMessage message)
+    {
+        if (AttemptOf(message) is not { } attempt)
+            return _outbound.Writer.TryWrite(message);
+        // Queued and noted as not yet written in one step: its write cannot begin in between.
+        lock (_writing)
+        {
+            if (!_outbound.Writer.TryWrite(message))
+                return false;
+            _unwritten.Add(attempt);
+            return true;
+        }
+    }
 
     public async Task<bool> SendAsync(ServerMessage message, CancellationToken cancellationToken)
     {
@@ -151,6 +163,7 @@ public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string
     private bool _closed;
     private bool _reported;
     private readonly List<Guid> _skipped = [];
+    private readonly HashSet<Guid> _unwritten = [];
 
     /// <summary>
     /// Writes what is queued, in order, until the session closes or <paramref name="cancellationToken"/> is cancelled. A message
@@ -179,12 +192,26 @@ public sealed class AgentSession(Guid agentId, string name, IReadOnlyList<string
         lock (_writing)
         {
             if (!_closed && !cancellationToken.IsCancellationRequested)
+            {
+                if (AttemptOf(message) is { } begun)
+                    _unwritten.Remove(begun);
                 return true;
+            }
             _closed = true;
             if (AttemptOf(message) is { } attempt)
                 _skipped.Add(attempt);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Whether the write of an attempt's assignment handed to this session has begun. False while it waits on the queue and
+    /// for one this session never wrote, which <see cref="TakeUnwritten"/> reports once the session has closed.
+    /// </summary>
+    public bool WriteBegan(Guid attemptId)
+    {
+        lock (_writing)
+            return !_unwritten.Contains(attemptId);
     }
 
     public void Close()

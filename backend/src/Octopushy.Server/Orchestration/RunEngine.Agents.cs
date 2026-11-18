@@ -307,7 +307,7 @@ public sealed partial class RunEngine
                     // Hand off each saved assignment before preparing the next, under the same gate as revocation.
                     if (prepared is { } ready)
                     {
-                        var handOff = new HandOff(ready.Session.AgentId, ready.Session.Id,
+                        var handOff = new HandOff(ready.Session, ++_handOffNumber,
                             db.ChangeTracker.Entries<SecretResolution>().Where(e => e.Entity.AttemptId == attempt.Id).Select(e => e.Entity.Id).ToArray(),
                             reservation);
                         if (ready.Session.TrySend(ready.Message))
@@ -363,18 +363,48 @@ public sealed partial class RunEngine
     /// An assignment put on a session's queue, with what was recorded for it: the secrets released and the reservation made.
     /// The session is the one it was handed to: only that session can say it never wrote it.
     /// </summary>
-    private sealed record HandOff(Guid AgentId, Guid SessionId, long[] Releases, ReservationChange? Reservation);
+    private sealed record HandOff(AgentSession Session, long Number, long[] Releases, ReservationChange? Reservation);
 
     // Protected by the gate. In memory only: after a restart nothing is put back, and a lost assignment is decided by its lease.
     // By attempt and session: a read its agent's next Hello queued again can be handed off anew before the session that never
     // wrote it has closed, and that session's record must still be there to take back what it recorded.
+    // Nothing an agent says removes a record: one goes when its session says it never wrote it, or once it is of no more use
+    // (PruneHandOffsAsync). So while an attempt is assigned and not started, the hand-off it is assigned by has its record,
+    // and that is the one with the highest number.
     private readonly Dictionary<(Guid Attempt, Guid Session), HandOff> _handOffs = [];
+    private long _handOffNumber;
+    private int _handOffsAfterPrune;
 
-    /// <summary>Forgets the hand-off of an attempt its agent has just answered for: it was delivered, through the agent's connection.</summary>
-    private void ForgetHandOff(Guid attemptId, Guid agentId)
+    /// <summary>
+    /// How many hand-off records may be added before those of no more use are looked for again: one query for that many
+    /// hand-offs. Zero in tests that look every pass.
+    /// </summary>
+    internal int HandOffsBetweenPrunes { get; set; } = 64;
+
+    /// <summary>Whether a hand-off record of an attempt is kept, for tests.</summary>
+    internal bool KeepsHandOff(Guid attemptId) => _handOffs.Keys.Any(k => k.Attempt == attemptId);
+
+    /// <summary>
+    /// Drops the hand-off records of no more use, so a connection that stays for weeks does not keep one for every attempt
+    /// it ever took. A record is of use for two things. While its attempt is saved as assigned and not started, it shows that
+    /// attempt was handed to its session, which keeps an earlier session's unwritten hand-off of the same attempt from putting
+    /// it back. And while its own write has not begun, it holds what to take back if it never does. Neither is read from
+    /// anything but the database and this server's own writer.
+    /// </summary>
+    private async Task PruneHandOffsAsync(OctopushyDb db, CancellationToken cancellationToken)
     {
-        if (connections.Get(agentId) is { } session)
-            _handOffs.Remove((attemptId, session.Id));
+        if (_handOffs.Count == 0 || _handOffs.Count < _handOffsAfterPrune + HandOffsBetweenPrunes)
+            return;
+        var attempts = _handOffs.Keys.Select(k => k.Attempt).Distinct().ToList();
+        var unstarted = (await db.Attempts
+            .Where(a => attempts.Contains(a.Id) && a.Status == AttemptStatuses.Assigned && a.StartedAt == null)
+            .Select(a => a.Id).ToListAsync(cancellationToken)).ToHashSet();
+        foreach (var (key, handOff) in _handOffs.ToList())
+        {
+            if (!unstarted.Contains(key.Attempt) && handOff.Session.WriteBegan(key.Attempt))
+                _handOffs.Remove(key);
+        }
+        _handOffsAfterPrune = _handOffs.Count;
     }
 
     /// <summary>The reservation building an assignment changed, if it did.</summary>
@@ -424,21 +454,18 @@ public sealed partial class RunEngine
     public Task OnSessionClosedAsync(Guid agentId, Guid sessionId, IReadOnlyList<Guid> attemptIds, CancellationToken cancellationToken) =>
         WithDbAsync(async db =>
         {
-            // Whatever the session did write is decided by results and leases; its records are of no more use.
-            var others = _handOffs.Keys.Where(k => k.Session == sessionId && !attemptIds.Contains(k.Attempt)).ToList();
-            foreach (var key in others)
-                _handOffs.Remove(key);
             var (cleaned, requeued) = (0, 0);
             foreach (var attemptId in attemptIds.Distinct())
             {
-                if (!_handOffs.Remove((attemptId, sessionId), out var handOff) || handOff.AgentId != agentId)
+                if (!_handOffs.Remove((attemptId, sessionId), out var handOff) || handOff.Session.AgentId != agentId)
                     continue;
                 // Never written: the secrets this hand-off recorded as released were not, whatever became of the attempt since.
                 // A read may already be queued again by its agent's next Hello, or handed off anew.
                 db.SecretResolutions.RemoveRange(await db.SecretResolutions.Where(r => handOff.Releases.Contains(r.Id)).ToListAsync(cancellationToken));
                 cleaned++;
-                // The attempt itself goes back only while this hand-off is still the one it is assigned by.
-                if (_handOffs.Keys.Any(k => k.Attempt == attemptId))
+                // The attempt itself goes back only while this hand-off is still the one it is assigned by. A later record says
+                // it was handed off again since, and that one may have been written.
+                if (_handOffs.Any(other => other.Key.Attempt == attemptId && other.Value.Number > handOff.Number))
                     continue;
                 var attempt = await db.Attempts.Include(a => a.Step)
                     .FirstOrDefaultAsync(a => a.Id == attemptId && a.AgentId == agentId, cancellationToken);
@@ -705,8 +732,6 @@ public sealed partial class RunEngine
         WithDbAsync(async db =>
         {
             var attempt = await db.Attempts.FirstOrDefaultAsync(a => a.Id == attemptId && a.AgentId == agentId, cancellationToken);
-            if (attempt is not null)
-                ForgetHandOff(attempt.Id, agentId);
             if (attempt?.Status == AttemptStatuses.Assigned)
             {
                 attempt.Status = AttemptStatuses.Running;
@@ -758,8 +783,6 @@ public sealed partial class RunEngine
                 logger.LogWarning("Agent {Agent} reported a result for attempt {Attempt}, which is not assigned to it.", agentId, attemptId);
                 return true;
             }
-
-            ForgetHandOff(attempt.Id, agentId);
 
             // The result this attempt was settled with, sent again: nothing to do.
             if (attempt.ResultSha256 == received)
@@ -991,14 +1014,15 @@ public sealed partial class RunEngine
 
     private async Task ExpireLeasesAsync(OctopushyDb db, CancellationToken cancellationToken)
     {
+        await PruneHandOffsAsync(db, cancellationToken);
         var now = clock.GetUtcNow();
         var expired = await db.Attempts.Include(a => a.Step).ThenInclude(s => s!.Attempts)
             .Where(a => (a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running) && a.LeaseExpiresAt < now)
             .ToListAsync(cancellationToken);
         foreach (var attempt in expired)
         {
-            // Its hand-off record stays until its session closes: if the session never wrote it, what it recorded as released
-            // is still taken back then. The attempt is settled here, so it is not put back.
+            // Its hand-off record stays while its write has not begun: if the session never wrote it, what it recorded as
+            // released is still taken back when the session closes. The attempt is settled here, so it is not put back.
             attempt.Status = AttemptStatuses.Uncertain;
             attempt.Error = LeaseExpired;
             attempt.FinishedAt = now;

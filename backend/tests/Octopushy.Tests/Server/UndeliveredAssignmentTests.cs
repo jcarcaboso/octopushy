@@ -149,6 +149,8 @@ public class UndeliveredAssignmentTests(PostgresFixture postgres) : IClassFixtur
         var agent = await server.ConnectAgentAsync("home");
         var connections = server.Services.GetRequiredService<AgentConnections>();
         connections.Disconnect(agent.Id);
+        // Records of no more use are looked for at every pass: the one of a hand-off never written is still of use.
+        LookEveryPass(server);
         await server.SyncAndTrustAsync();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -189,6 +191,80 @@ public class UndeliveredAssignmentTests(PostgresFixture postgres) : IClassFixtur
         Assert.DoesNotContain(Drain(old), m => m.Assignment is not null);
         await Task.Delay(200);
         Assert.DoesNotContain(Drain(fresh), m => m.Assignment is not null);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_read_a_newer_session_wrote_is_not_put_back_by_the_older_session_that_never_did(bool newerClosedFirst)
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        var connections = server.Services.GetRequiredService<AgentConnections>();
+        connections.Disconnect(agent.Id);
+        LookEveryPass(server);
+        await server.SyncAndTrustAsync();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var old = new AgentStream
+        {
+            OnWrite = m => m.ResultAck is not null ? Block(entered, release) : Task.CompletedTask,
+        };
+        var oldConnection = await ConnectAsync(server, agent, old, Hello([TofuStateStore.AgentCapability]));
+        Assert.True(connections.Get(agent.Id)!.TrySend(new ServerMessage { ResultAck = new ResultAck { AttemptId = "x" } }));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await server.TickAsync();
+        var preview = await PreviewAsync(server);
+        Assert.Equal(AttemptStatuses.Assigned, preview.Status);
+
+        // The newer connection's Hello queues the read again, and it is handed off and written there.
+        var fresh = new AgentStream();
+        var freshConnection = await ConnectAsync(server, agent, fresh, Hello([TofuStateStore.AgentCapability]));
+        await server.TickAsync();
+        Assert.Equal(preview.Id.ToString(), (await NextAssignmentAsync(fresh)).AttemptId);
+        var sent = (await ReleasesAsync(server, preview.Id)).Select(r => r.Id).ToList();
+        // Passes that look for records of no more use keep the newer one: its attempt is assigned and not started.
+        await server.TickAsync();
+        if (newerClosedFirst)
+        {
+            fresh.Complete();
+            await freshConnection.WaitAsync(TimeSpan.FromSeconds(10));
+            await server.TickAsync();
+        }
+
+        release.SetResult();
+        await oldConnection.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // The agent may have the read from the newer session: it stays assigned, to be decided by its result or its lease.
+        preview = await PreviewAsync(server);
+        Assert.Equal((AttemptStatuses.Assigned, 1), (preview.Status, preview.Number));
+        var kept = (await ReleasesAsync(server, preview.Id)).Select(r => r.Id).ToList();
+        Assert.NotEmpty(kept);
+        Assert.All(kept, id => Assert.Contains(id, sent));
+        Assert.DoesNotContain(Drain(old), m => m.Assignment is not null);
+    }
+
+    [Fact]
+    public async Task A_hand_off_record_is_kept_while_its_attempt_is_assigned_and_not_started_and_dropped_once_it_started()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        var agent = await server.ConnectAgentAsync("home");
+        server.Services.GetRequiredService<AgentConnections>().Disconnect(agent.Id);
+        var engine = LookEveryPass(server);
+        await server.SyncAndTrustAsync();
+        var stream = new AgentStream();
+        await ConnectAsync(server, agent, stream, Hello([TofuStateStore.AgentCapability]));
+        await server.TickAsync();
+        var preview = await PreviewAsync(server);
+        Assert.Equal(preview.Id.ToString(), (await NextAssignmentAsync(stream)).AttemptId);
+
+        await server.TickAsync();
+        await server.TickAsync();
+        Assert.True(engine.KeepsHandOff(preview.Id));
+
+        await engine.OnStartedAsync(agent.Id, preview.Id, CancellationToken.None);
+        await server.TickAsync();
+        Assert.False(engine.KeepsHandOff(preview.Id));
     }
 
     [Fact]
@@ -305,6 +381,14 @@ public class UndeliveredAssignmentTests(PostgresFixture postgres) : IClassFixtur
         return new HeldConnection(connection, welcome);
     }
 
+    /// <summary>Has the engine look for hand-off records of no more use at every pass, and not once in so many hand-offs.</summary>
+    private static RunEngine LookEveryPass(ServerHarness server)
+    {
+        var engine = server.Services.GetRequiredService<RunEngine>();
+        engine.HandOffsBetweenPrunes = 0;
+        return engine;
+    }
+
     private static Task Block(TaskCompletionSource entered, TaskCompletionSource release)
     {
         entered.TrySetResult();
@@ -398,8 +482,10 @@ public class AgentSessionWriteTests
         }, CancellationToken.None);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
-        // Open, nothing is reported; the write in progress has begun.
+        // Open, nothing is reported; the write in progress has begun, and the one queued behind it has not.
         Assert.Empty(session.TakeUnwritten());
+        Assert.True(session.WriteBegan(first));
+        Assert.False(session.WriteBegan(second));
         session.Close();
         release.SetResult();
         await writer.WaitAsync(TimeSpan.FromSeconds(10));
@@ -407,6 +493,8 @@ public class AgentSessionWriteTests
         Assert.Equal([first.ToString()], written);
         Assert.Equal([second], session.TakeUnwritten());
         Assert.Empty(session.TakeUnwritten());
+        // Never written stays so, also once reported.
+        Assert.False(session.WriteBegan(second));
     }
 
     [Fact]
