@@ -1,0 +1,7 @@
+{
+  "key": "3439a2648c29b42aa01876c8a49f03767ce75172dd7242e76bc60d572bcfa52c",
+  "flake": "modules/nixos",
+  "output": "base-image",
+  "system": "x86_64-linux",
+  "lock": "templates/nixos-base/flake.lock"
+}

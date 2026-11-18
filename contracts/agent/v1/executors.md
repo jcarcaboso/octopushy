@@ -133,6 +133,8 @@ concluding that a VM is absent the executor checks that the token has `VM.Audit`
 
 ### `observe`
 
+Examples: [input](examples/proxmox/observe.input.json), [output](examples/proxmox/observe.output.json), [that cannot show every VM](examples/proxmox/observe.output.incomplete-visibility.json).
+
 Input: `{ "connection": { … } }`
 
 Output:
@@ -162,6 +164,8 @@ Output:
 token.
 
 ### `verify-guest`
+
+Examples: [input](examples/proxmox/verify-guest.input.json), [output](examples/proxmox/verify-guest.output.json).
 
 Input:
 
@@ -253,11 +257,15 @@ token started only to a token with `Sys.Audit` on `/nodes/{node}`.
 
 ### `verify-absent`
 
+Examples: [input](examples/proxmox/verify-absent.input.json), [output](examples/proxmox/verify-absent.output.json).
+
 Input: `{ "connection": { … }, "vmid": 210, "waitSeconds": 60 }`
 
 Output: `{ "present": false }`. Fails if the VMID still exists when the wait ends.
 
 ### `set-protection`
+
+Examples: [input](examples/proxmox/set-protection.input.json), [output](examples/proxmox/set-protection.output.json).
 
 Input: `{ "connection": { … }, "node": "korriban", "vmid": 210, "kind": "qemu", "protection": false }`
 
@@ -392,6 +400,8 @@ none. See [how it works](../../../docs/opentofu-state.md).
 
 ### `preview`
 
+Examples: [input](examples/opentofu/preview.input.json), [output](examples/opentofu/preview.output.json).
+
 Runs `init`, then `plan -detailed-exitcode -out=…` (with `-destroy` when `destroy`
 is true).
 
@@ -494,6 +504,8 @@ has no lock file; then the archive holds only `plan.bin`.
 
 ### `apply`
 
+Examples: [input](examples/opentofu/apply.input.json), [output](examples/opentofu/apply.output.json).
+
 The assignment carries the artifact `plan.tar.gz` from the preview. The executor
 restores `.terraform.lock.hcl` into the root before `init` (then `-lockfile=readonly`),
 runs `apply` on `plan.bin`, then `output -json`. If only `output -json` fails, the
@@ -574,6 +586,8 @@ Input (the same for both actions, except as noted):
 
 ### `preview`
 
+Examples: [input](examples/ansible/preview.input.json), [output](examples/ansible/preview.output.json).
+
 Read-only. Carries no secrets and no `sshKey`, and does not contact the guest. Runs
 `--version`, `--syntax-check` and `--list-tasks`, with `(secret)` standing in for each secret,
 then the `prepare` playbook locally, if there is one, with `OCTOPUSHY_PREPARED_FILE` set. The
@@ -598,6 +612,8 @@ Output, and the content of the artifact `preview.json`:
 The controller records the artifact's SHA-256 as `planSha256`, which the approval names.
 
 ### `run`
+
+Examples: [input](examples/ansible/run.input.json), [output](examples/ansible/run.output.json), [with an outcome](examples/ansible/run.output.outcome.json).
 
 **Mutating and not normally cancellable.** The assignment carries `preview.json`, whose SHA-256 is
 checked, and the secrets `ansible.ssh-key`, `ansible.var.<name>` and `ansible.file.<name>`. They
@@ -643,6 +659,8 @@ has at least `OCTOPUSHY_NIX_MIN_FREE_GB` free (20 by default). That is how a sma
 stays out of builds without labels.
 
 ### `build`
+
+Examples: [input](examples/nix/build.input.json), [output](examples/nix/build.output.json).
 
 Input:
 

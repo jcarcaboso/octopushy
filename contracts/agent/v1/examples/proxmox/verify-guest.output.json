@@ -1,0 +1,41 @@
+{
+  "checks": [
+    {
+      "detail": "VM 310 exists",
+      "name": "present",
+      "ok": true
+    },
+    {
+      "detail": "VM 310 is on korriban",
+      "name": "placement",
+      "ok": true
+    },
+    {
+      "detail": "name is krb-app-01",
+      "name": "name",
+      "ok": true
+    },
+    {
+      "detail": "VM 310 is running",
+      "name": "running",
+      "ok": true
+    },
+    {
+      "detail": "guest agent reports 10.1.0.31",
+      "name": "address",
+      "ok": true
+    }
+  ],
+  "description": "Managed by Octopushy as home/korriban/krb-app-01.",
+  "ipv4Addresses": [
+    "10.1.0.31"
+  ],
+  "name": "krb-app-01",
+  "node": "korriban",
+  "present": true,
+  "status": "running",
+  "tags": [
+    "octopushy",
+    "home"
+  ]
+}

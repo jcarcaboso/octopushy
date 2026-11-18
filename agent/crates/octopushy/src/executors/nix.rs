@@ -132,7 +132,7 @@ pub fn availability(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Input {
+pub(crate) struct Input {
     #[serde(default)]
     key: String,
     flake: String,

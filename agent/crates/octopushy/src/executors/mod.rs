@@ -3,6 +3,8 @@
 //! Inputs and outputs follow `contracts/agent/v1/executors.md`.
 
 pub mod ansible;
+#[cfg(test)]
+mod contract_inputs;
 pub mod nix;
 pub mod opentofu;
 pub mod proxmox;

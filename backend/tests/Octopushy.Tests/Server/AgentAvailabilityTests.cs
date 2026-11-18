@@ -547,8 +547,9 @@ public class AgentAvailabilityTests(PostgresFixture postgres) : IClassFixture<Po
 
         clock.Now += RunEngine.OfferEffectsEvery;
         stream.Send(new AgentMessage { Heartbeat = new Heartbeat() });
-        await WaitUntilAsync("the offer is stored", async () => AgentAvailability.Deserialize(await StoredAsync()).GetValueOrDefault("opentofu") == "gone");
-        Assert.False(session.OfferUnsaved);
+        // The session is marked saved just after the write, so both are waited for.
+        await WaitUntilAsync("the offer is stored",
+            async () => AgentAvailability.Deserialize(await StoredAsync()).GetValueOrDefault("opentofu") == "gone" && !session.OfferUnsaved);
         stream.Complete();
     }
 }

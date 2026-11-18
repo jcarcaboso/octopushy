@@ -55,7 +55,7 @@ struct TemplateImage {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Input {
+pub(crate) struct Input {
     #[serde(default)]
     stack: String,
     root: String,

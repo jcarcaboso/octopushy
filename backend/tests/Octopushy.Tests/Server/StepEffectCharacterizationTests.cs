@@ -143,7 +143,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
             step approval: succeeded | finished True | outputs False | attempts  | -
             step playbook: succeeded | finished True | outputs True | attempts succeeded | -
             configuration: applied this run's | revision this run's | at True | action setup | snapshot {"version": "1.2.3"} | proposed this run's | desired this run's
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             """, await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded, ConfigureRunTests.Recap()));
         EffectPins.Check("""
@@ -153,7 +153,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
             step approval: succeeded | finished True | outputs False | attempts  | -
             step playbook: succeeded | finished True | outputs True | attempts succeeded | -
             configuration: applied this run's | revision this run's | at True | action setup | snapshot {"version": "1.2.3"} | proposed this run's | desired this run's
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             """, await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded, ConfigureRunTests.Recap()));
     }
@@ -203,7 +203,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
             step approval: succeeded | finished True | outputs False | attempts  | -
             step playbook: uncertain | finished True | outputs False | attempts uncertain | the agent lost the attempt's stored result
             configuration: applied - | revision - | at False | action - | snapshot - | proposed this run's | desired this run's
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: notifications +1
             """, await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Uncertain, new JsonObject(), Lost));
         EffectPins.Check("""
@@ -213,7 +213,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
             step approval: succeeded | finished True | outputs False | attempts  | -
             step playbook: succeeded | finished True | outputs True | attempts succeeded | The result arrived after the agent had stopped reporting.
             configuration: applied this run's | revision this run's | at True | action setup | snapshot - | proposed this run's | desired this run's
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             """, await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded, ConfigureRunTests.Recap()));
         EffectPins.Check("""
@@ -223,7 +223,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
             step approval: succeeded | finished True | outputs False | attempts  | -
             step playbook: succeeded | finished True | outputs True | attempts succeeded | The result arrived after the agent had stopped reporting.
             configuration: applied this run's | revision this run's | at True | action setup | snapshot - | proposed this run's | desired this run's
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             """, await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded, ConfigureRunTests.Recap()));
     }
@@ -249,7 +249,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step playbook: succeeded | finished True | outputs True | attempts succeeded | -
                 configuration: applied this run's | revision this run's | at True | action setup | snapshot - | proposed this run's | desired this run's
                 access key v1: last used by this run at True | provisioned True | authorized False | verified False | removed False
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: none
                 """
             : """
@@ -260,7 +260,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step playbook: succeeded | finished True | outputs True | attempts succeeded | -
                 configuration: applied this run's | revision this run's | at True | action setup | snapshot - | proposed this run's | desired this run's
                 access key v1: last used - at False | provisioned True | authorized False | verified False | removed False
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: none
                 """,
             await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded, recap));
@@ -273,7 +273,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step playbook: succeeded | finished True | outputs True | attempts succeeded | -
                 configuration: applied this run's | revision this run's | at True | action setup | snapshot - | proposed this run's | desired this run's
                 access key v1: last used by this run at True | provisioned True | authorized False | verified False | removed False
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: none
                 """
             : """
@@ -284,7 +284,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step playbook: succeeded | finished True | outputs True | attempts succeeded | -
                 configuration: applied this run's | revision this run's | at True | action setup | snapshot - | proposed this run's | desired this run's
                 access key v1: last used - at False | provisioned True | authorized False | verified False | removed False
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: none
                 """,
             await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded, recap));
@@ -312,7 +312,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step approval: succeeded | finished True | outputs False | attempts  | -
                 step playbook: failed | finished True | outputs True | attempts succeeded | It reported pending-reboot: A reboot is due..
                 configuration: applied - | revision - | at False | action - | snapshot - | proposed this run's | desired this run's
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: notifications +1
                 """
             : """
@@ -322,7 +322,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step approval: succeeded | finished True | outputs False | attempts  | -
                 step playbook: succeeded | finished True | outputs True | attempts succeeded | -
                 configuration: applied this run's | revision this run's | at True | action setup | snapshot {"version": "2"} | proposed this run's | desired this run's
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: none
                 """,
             await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded, recap));
@@ -334,7 +334,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step approval: succeeded | finished True | outputs False | attempts  | -
                 step playbook: failed | finished True | outputs True | attempts succeeded | It reported pending-reboot: A reboot is due..
                 configuration: applied - | revision - | at False | action - | snapshot - | proposed this run's | desired this run's
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: none
                 """
             : """
@@ -344,7 +344,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step approval: succeeded | finished True | outputs False | attempts  | -
                 step playbook: succeeded | finished True | outputs True | attempts succeeded | -
                 configuration: applied this run's | revision this run's | at True | action setup | snapshot {"version": "2"} | proposed this run's | desired this run's
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: none
                 """,
             await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded, recap));
@@ -368,7 +368,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
             step approval: succeeded | finished True | outputs False | attempts  | -
             step playbook: succeeded | finished True | outputs True | attempts succeeded | -
             configuration: applied - | revision - | at False | action - | snapshot - | proposed this run's | desired this run's
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             """, await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded,
             ConfigureRunTests.Recap("up-to-date", "Every tool is at the approved version.")));
@@ -400,7 +400,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step outcome-approval: awaiting-approval | finished False | outputs False | attempts  | The playbook reported deferred: Three threads.. Work is active on the guest. Approving runs setup once more with allow_busy.
                 step playbook-approved: pending | finished False | outputs False | attempts  | -
                 configuration: applied - | revision - | at False | action - | snapshot - | proposed this run's | desired this run's
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: notifications +1
                 """
             : """
@@ -412,7 +412,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step outcome-approval: awaiting-approval | finished False | outputs False | attempts  | The playbook reported deferred: Three threads.. Work is active on the guest. Approving runs setup once more with allow_busy.
                 step playbook-approved: pending | finished False | outputs False | attempts  | -
                 configuration: applied - | revision - | at False | action - | snapshot - | proposed this run's | desired this run's
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: notifications +1
                 """,
             await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded, ConfigureRunTests.Recap("deferred", "Three threads.")));
@@ -426,7 +426,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step outcome-approval: awaiting-approval | finished False | outputs False | attempts  | The playbook reported deferred: Three threads.. Work is active on the guest. Approving runs setup once more with allow_busy.
                 step playbook-approved: pending | finished False | outputs False | attempts  | -
                 configuration: applied - | revision - | at False | action - | snapshot - | proposed this run's | desired this run's
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: none
                 """
             : """
@@ -438,7 +438,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step outcome-approval: awaiting-approval | finished False | outputs False | attempts  | The playbook reported deferred: Three threads.. Work is active on the guest. Approving runs setup once more with allow_busy.
                 step playbook-approved: pending | finished False | outputs False | attempts  | -
                 configuration: applied - | revision - | at False | action - | snapshot - | proposed this run's | desired this run's
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: none
                 """,
             await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded, ConfigureRunTests.Recap("deferred", "Three threads.")));
@@ -458,7 +458,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step outcome-approval: succeeded | finished True | outputs False | attempts  | The playbook reported deferred: Three threads.. Work is active on the guest. Approving runs setup once more with allow_busy.
                 step playbook-approved: succeeded | finished True | outputs True | attempts succeeded | -
                 configuration: applied this run's | revision this run's | at True | action setup | snapshot {"version": "1.2.3"} | proposed this run's | desired this run's
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: none
                 """
             : """
@@ -470,7 +470,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step outcome-approval: succeeded | finished True | outputs False | attempts  | The playbook reported deferred: Three threads.. Work is active on the guest. Approving runs setup once more with allow_busy.
                 step playbook-approved: failed | finished True | outputs True | attempts succeeded | It reported deferred: Still busy., after the one approved attempt.
                 configuration: applied - | revision - | at False | action - | snapshot - | proposed this run's | desired this run's
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: notifications +1
                 """,
             await EffectPins.DeliverAsync(server, agent, again, Outcome.Succeeded, recap));
@@ -484,7 +484,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step outcome-approval: succeeded | finished True | outputs False | attempts  | The playbook reported deferred: Three threads.. Work is active on the guest. Approving runs setup once more with allow_busy.
                 step playbook-approved: succeeded | finished True | outputs True | attempts succeeded | -
                 configuration: applied this run's | revision this run's | at True | action setup | snapshot {"version": "1.2.3"} | proposed this run's | desired this run's
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: none
                 """
             : """
@@ -496,7 +496,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step outcome-approval: succeeded | finished True | outputs False | attempts  | The playbook reported deferred: Three threads.. Work is active on the guest. Approving runs setup once more with allow_busy.
                 step playbook-approved: failed | finished True | outputs True | attempts succeeded | It reported deferred: Still busy., after the one approved attempt.
                 configuration: applied - | revision - | at False | action - | snapshot - | proposed this run's | desired this run's
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: none
                 """,
             await EffectPins.DeliverAsync(server, agent, again, Outcome.Succeeded, recap));
@@ -529,7 +529,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step approval: succeeded | finished True | outputs False | attempts  | -
                 step playbook: failed | finished True | outputs True | attempts succeeded | It reported ***.
                 configuration: applied - | revision - | at False | action - | snapshot - | proposed this run's | desired this run's
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: notifications +1
                 """
             : """
@@ -539,7 +539,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
                 step approval: succeeded | finished True | outputs False | attempts  | -
                 step playbook: succeeded | finished True | outputs True | attempts succeeded | -
                 configuration: applied this run's | revision this run's | at True | action setup | snapshot - | proposed this run's | desired this run's
-                resource: checked True | applied True | verified True | bound 310 | outputs False
+                resource: checked True | applied True | verified True | bound 310 | outputs True
                 rows: none
                 """,
             await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded,
@@ -580,7 +580,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
             step outcome-approval: skipped | finished False | outputs False | attempts  | The playbook reported an outcome that ends the run.
             step playbook-approved: skipped | finished False | outputs False | attempts  | The playbook reported an outcome that ends the run.
             configuration: applied this run's | revision this run's | at True | action setup | snapshot {"version": "1"} | proposed this run's | desired this run's
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             """, await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded, ConfigureRunTests.Recap("deferred", "Three threads.")));
         EffectPins.Check("""
@@ -592,7 +592,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
             step outcome-approval: skipped | finished False | outputs False | attempts  | The playbook reported an outcome that ends the run.
             step playbook-approved: skipped | finished False | outputs False | attempts  | The playbook reported an outcome that ends the run.
             configuration: applied this run's | revision this run's | at True | action setup | snapshot {"version": "1"} | proposed this run's | desired this run's
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             """, await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded, ConfigureRunTests.Recap("deferred", "Three threads.")));
     }
@@ -617,7 +617,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
             step approval: succeeded | finished True | outputs False | attempts  | -
             step no-such-step: succeeded | finished True | outputs True | attempts succeeded | -
             configuration: applied - | revision - | at False | action - | snapshot - | proposed this run's | desired this run's
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             """, await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded, ConfigureRunTests.Recap()));
         EffectPins.Check("""
@@ -627,7 +627,7 @@ public class ConfigureEffectCharacterizationTests(PostgresFixture postgres) : IC
             step approval: succeeded | finished True | outputs False | attempts  | -
             step no-such-step: succeeded | finished True | outputs True | attempts succeeded | -
             configuration: applied - | revision - | at False | action - | snapshot - | proposed this run's | desired this run's
-            resource: checked True | applied True | verified True | bound 310 | outputs False
+            resource: checked True | applied True | verified True | bound 310 | outputs True
             rows: none
             """, await EffectPins.DeliverAsync(server, agent, playbook, Outcome.Succeeded, ConfigureRunTests.Recap()));
     }

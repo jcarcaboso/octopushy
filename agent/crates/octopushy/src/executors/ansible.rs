@@ -74,7 +74,7 @@ const REFUSAL_SPACING: Duration = Duration::from_secs(6);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Input {
+pub(crate) struct Input {
     #[serde(default)]
     image: String,
     root: String,

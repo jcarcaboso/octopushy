@@ -1,0 +1,15 @@
+{
+  "connection": {
+    "endpoint": "https://10.1.0.10:8006/",
+    "verifyTls": false,
+    "caCertificatePem": null
+  },
+  "node": "korriban",
+  "vmid": 310,
+  "kind": "qemu",
+  "name": "krb-app-01",
+  "expectRunning": true,
+  "expectIpv4": "10.1.0.31",
+  "waitSeconds": 60,
+  "protection": false
+}

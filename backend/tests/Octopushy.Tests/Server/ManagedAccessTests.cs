@@ -170,6 +170,30 @@ public class ManagedAccessTests(PostgresFixture postgres) : IClassFixture<Postgr
         Assert.Equal(before.PublicKey, (await KeyAsync(server)).PublicKey);
     }
 
+    /// <summary>
+    /// Use of the key, read from the recap of the run example in contracts/agent/v1/examples: a playbook that did something, by
+    /// either count alone, used it.
+    /// </summary>
+    [Theory]
+    [InlineData("ok")]
+    [InlineData("changed")]
+    public async Task A_playbook_that_did_something_by_the_run_examples_recap_used_the_key(string count)
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        var (_, agent, http) = await ConfigureRunTests.ProvisionedAsync(server);
+        using var _ = http;
+        await ConfigureAsync(server);
+        await ConfigureRunTests.PreviewAsync(agent);
+        var example = ContractExamples.Output("ansible", "run");
+        var recap = example["recap"]!.AsObject();
+        Assert.True(recap[count]!.GetValue<int>() > 0);
+        recap[count == "ok" ? "changed" : "ok"] = 0;
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, example);
+        await server.TickAsync();
+        Assert.Equal(RunStatuses.Succeeded, (await server.LatestRunAsync(Guest, Operations.Configure)).Status);
+        Assert.NotNull((await KeyAsync(server)).LastUsedAt);
+    }
+
     [Fact]
     public async Task A_playbook_that_did_nothing_is_not_use_of_the_key()
     {

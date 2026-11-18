@@ -118,12 +118,13 @@ fn number(f: f64) -> Value {
 // ---------------------------------------------------------------------------
 // observe
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct ObserveInput {
+    connection: Connection,
+}
+
 async fn observe(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
-    #[derive(Deserialize)]
-    struct Input {
-        connection: Connection,
-    }
-    let input: Input = ctx.input()?;
+    let input: ObserveInput = ctx.input()?;
     let c = client(cfg, ctx, &input.connection)?;
 
     let version = c.version().await?;
@@ -271,7 +272,7 @@ fn expected_kind(kind: &Option<String>) -> Result<GuestKind, Failure> {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct VerifyGuestInput {
+pub(crate) struct VerifyGuestInput {
     connection: Connection,
     node: String,
     vmid: u32,
@@ -785,19 +786,21 @@ async fn created_host_keys(
 // ---------------------------------------------------------------------------
 // verify-absent
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VerifyAbsentInput {
+    connection: Connection,
+    vmid: u32,
+    #[serde(default = "default_absent_wait")]
+    wait_seconds: u64,
+}
+
+fn default_absent_wait() -> u64 {
+    60
+}
+
 async fn verify_absent(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Input {
-        connection: Connection,
-        vmid: u32,
-        #[serde(default = "default_absent_wait")]
-        wait_seconds: u64,
-    }
-    fn default_absent_wait() -> u64 {
-        60
-    }
-    let input: Input = ctx.input()?;
+    let input: VerifyAbsentInput = ctx.input()?;
     let c = client(cfg, ctx, &input.connection)?;
     require_audit(&c, input.vmid).await?;
 
@@ -836,18 +839,19 @@ async fn verify_absent(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
 // ---------------------------------------------------------------------------
 // set-protection
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SetProtectionInput {
+    connection: Connection,
+    node: String,
+    vmid: u32,
+    #[serde(default)]
+    kind: Option<String>,
+    protection: bool,
+}
+
 async fn set_protection(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Input {
-        connection: Connection,
-        node: String,
-        vmid: u32,
-        #[serde(default)]
-        kind: Option<String>,
-        protection: bool,
-    }
-    let input: Input = ctx.input()?;
+    let input: SetProtectionInput = ctx.input()?;
     let kind = expected_kind(&input.kind)?;
     let noun = kind.noun();
     let c = client(cfg, ctx, &input.connection)?;
