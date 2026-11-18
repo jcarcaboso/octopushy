@@ -731,6 +731,63 @@ public class AgentUpdateTests(PostgresFixture postgres) : IClassFixture<Postgres
         Assert.False(record.Draining);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_stored_refusal_waits_for_a_change_to_its_guest_whose_lease_ran_out_until_its_runner_says_it_stopped_or_its_run_is_closed(bool close)
+    {
+        await using var setup = await StartAsync(Lab());
+        var runner = await setup.Server.ConnectAgentFromAsync(IPAddress.Parse("10.9.9.9"), "runner", "home");
+        await ProvisionAsync(setup, runner);
+        var worker = await setup.Server.ConnectAgentFromAsync(GuestAddress, "krb-app-01", "home");
+        worker = await setup.ReportVersionAsync(worker, "0.0.1");
+        var resource = await setup.Server.ResourceAsync(Guest);
+        var received = Path.Combine(setup.Remote.Root, "push-received");
+        var release = Path.Combine(setup.Remote.Root, "push-release");
+        var hook = Path.Combine(setup.Remote.Root, "hooks", "pre-receive");
+        File.WriteAllText(hook, $"#!/bin/sh\ncat >/dev/null\ntouch '{received}'\nwhile [ ! -e '{release}' ]; do sleep 0.1; done\nexit 1\n");
+        File.SetUnixFileMode(hook, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var request = setup.RequestAsync(worker.Id);
+        Assignment second;
+        try
+        {
+            for (var i = 0; i < 300 && !File.Exists(received); i++)
+                await Task.Delay(100);
+            Assert.True(File.Exists(received), "The update's push never reached the remote.");
+            second = await SetupRunningAsync(setup, runner, resource.Id);
+        }
+        finally
+        {
+            File.WriteAllText(release, "");
+        }
+
+        await request;
+        // The setup's lease runs out: uncertain, and it may still execute on the runner.
+        var attemptId = Guid.Parse(second.AttemptId);
+        await setup.Server.WithDbAsync(db => db.Attempts.Where(a => a.Id == attemptId)
+            .ExecuteUpdateAsync(u => u.SetProperty(a => a.LeaseExpiresAt, DateTimeOffset.UtcNow.AddSeconds(-1))));
+        await setup.Server.TickAsync();
+        Assert.Equal(AttemptStatuses.Uncertain, await setup.Server.QueryAsync(db => db.Attempts.Where(a => a.Id == attemptId).Select(a => a.Status).SingleAsync()));
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+        Assert.Equal("updating", await setup.StateAsync(worker.Id));
+        Assert.True((await setup.RecordAsync(worker.Id)).Draining);
+
+        // The runner says it runs nothing, or a person who looked at the guest closes the setup's run: the refusal ends the update.
+        if (close)
+        {
+            var runId = await setup.Server.QueryAsync(db => db.Attempts.Where(a => a.Id == attemptId).Select(a => a.Step!.RunId).SingleAsync());
+            (await setup.Client.PostAsync($"/api/runs/{runId}/close", null)).EnsureSuccessStatusCode();
+        }
+        else
+            runner.Session.ReportRunning([], DateTimeOffset.UtcNow.AddSeconds(1));
+        await setup.Updates.AdvanceAsync(CancellationToken.None);
+        var record = await setup.RecordAsync(worker.Id);
+        Assert.Equal(AgentUpdateStates.Failed, record.UpdateState);
+        Assert.Equal(AgentUpdateFailures.CommitRefused, record.UpdateFailure);
+        Assert.False(record.Draining);
+    }
+
     [Fact]
     public async Task A_claim_a_stopped_server_left_fails_only_once_another_change_to_its_guest_has_settled()
     {

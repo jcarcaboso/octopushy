@@ -89,8 +89,17 @@ public sealed partial class RunEngine
             .Where(a => a.AgentId == agentId && a.Mutating && a.Status == AttemptStatuses.Uncertain
                         && !a.LateResult && !a.OutputsWithheld && a.ResultSha256 == null)
             .OrderBy(a => a.FinishedAt).ToListAsync(ct);
-        var said = connections.Get(agentId)?.LastRunning;
-        return uncertain.FirstOrDefault(a => said is null || a.FinishedAt is not { } stopped || said.At <= stopped || said.AttemptIds.Contains(a.Id.ToString()));
+        return uncertain.FirstOrDefault(MayStillExecute);
+    }
+
+    /// <summary>
+    /// Whether an uncertain change with no result taken may still execute on its agent: true until a Hello or heartbeat on the
+    /// agent's current connection, said after it became uncertain, does not list it. Those list every attempt it still executes.
+    /// </summary>
+    internal bool MayStillExecute(Attempt attempt)
+    {
+        var said = attempt.AgentId is { } agentId ? connections.Get(agentId)?.LastRunning : null;
+        return said is null || attempt.FinishedAt is not { } stopped || said.At <= stopped || said.AttemptIds.Contains(attempt.Id.ToString());
     }
 
     /// <summary>Assigns queued attempts to connected agents that are allowed and have room.</summary>

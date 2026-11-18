@@ -499,12 +499,22 @@ public sealed class AgentUpdates(
         return await GuestChangingAsync(db, agent, ct) ? null : session;
     }
 
-    /// <summary>A change to the agent's guest is queued, assigned or running: it may still restart the agent.</summary>
-    private static Task<bool> GuestChangingAsync(OctopushyDb db, AgentRecord agent, CancellationToken ct)
+    /// <summary>
+    /// A change to the agent's guest may still restart the agent: it is queued, assigned or running, or it became uncertain and
+    /// may still execute on the agent that ran it, whose lease running out did not stop it, until that agent says it no longer
+    /// runs it or a person closes its run.
+    /// </summary>
+    private async Task<bool> GuestChangingAsync(OctopushyDb db, AgentRecord agent, CancellationToken ct)
     {
         var guest = agent.UpdateResourceId;
-        return db.Attempts.AnyAsync(a => a.Mutating && a.Step!.Run!.ResourceId == guest
-            && (a.Status == AttemptStatuses.Queued || a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running), ct);
+        if (await db.Attempts.AnyAsync(a => a.Mutating && a.Step!.Run!.ResourceId == guest
+                && (a.Status == AttemptStatuses.Queued || a.Status == AttemptStatuses.Assigned || a.Status == AttemptStatuses.Running), ct))
+            return true;
+        var uncertain = await db.Attempts.AsNoTracking()
+            .Where(a => a.Mutating && a.Step!.Run!.ResourceId == guest && a.Status == AttemptStatuses.Uncertain
+                        && a.Step.Run.Status == RunStatuses.Uncertain && !a.LateResult && !a.OutputsWithheld && a.ResultSha256 == null)
+            .ToListAsync(ct);
+        return uncertain.Any(engine.MayStillExecute);
     }
 
     private static string LostSentence(AgentRecord agent, AgentSession session, IReadOnlyList<string> lost)
