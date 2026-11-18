@@ -15,17 +15,17 @@ public class StepEffectOperationTests
     private const string Switch = "switch";
 
     [Theory]
-    [InlineData(Operations.Provision, StepNames.Plan, Switch)]
+    [InlineData(Operations.Provision, StepNames.Plan, "PlanEffect")]
     [InlineData(Operations.Provision, StepNames.Approval, Switch)]
     [InlineData(Operations.Provision, StepNames.Unprotect, Switch)]
     [InlineData(Operations.Provision, StepNames.Apply, Switch)]
     [InlineData(Operations.Provision, StepNames.Verify, Switch)]
     [InlineData(Operations.Provision, StepNames.Reprotect, Switch)]
-    [InlineData(Operations.Retire, StepNames.Plan, Switch)]
+    [InlineData(Operations.Retire, StepNames.Plan, "PlanEffect")]
     [InlineData(Operations.Retire, StepNames.Approval, Switch)]
     [InlineData(Operations.Retire, StepNames.Unprotect, Switch)]
     [InlineData(Operations.Retire, StepNames.Apply, "ForgetOutputsEffect")]
-    [InlineData(Operations.Retire, StepNames.VerifyAbsent, Switch)]
+    [InlineData(Operations.Retire, StepNames.VerifyAbsent, "VerifyAbsentEffect")]
     [InlineData(Operations.Attach, StepNames.Approval, Switch)]
     [InlineData(Operations.Attach, StepNames.Verify, "AttachVerifyEffect")]
     [InlineData(Operations.Attach, StepNames.Protect, Switch)]
@@ -50,6 +50,9 @@ public class StepEffectOperationTests
     // a provision's verify.
     [InlineData(Unknown, StepNames.Apply, "ForgetOutputsEffect")]
     [InlineData(Unknown, StepNames.Verify, Switch)]
+    // A plan's and a verify-absent's effect is the same in every run; a plan's branches on the operation inside it.
+    [InlineData(Unknown, StepNames.Plan, "PlanEffect")]
+    [InlineData(Unknown, StepNames.VerifyAbsent, "VerifyAbsentEffect")]
     public void Each_step_of_each_operation_has_one_effect(string operation, string step, string expected) =>
         Assert.Equal(expected, RunEngine.StepEffectFor(step, operation)?.GetType().Name ?? Switch);
 
