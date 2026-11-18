@@ -1,0 +1,8 @@
+# Runs the agent's root-only tests (crates/octopushy/tests/tool_users.rs) as root, with the tool
+# users the agent image has. The same Rust as agent/Containerfile. Build context: the repository.
+FROM docker.io/library/rust:1.98.1-trixie@sha256:a8a5f0a1e5fe7dfe1d352591e4a1c7dd2c08fd70475cae872cf3458ba0df0546
+COPY agent/packaging/tool-users.sh /tmp/tool-users.sh
+# The pool, and octopushy-agent (10001), whom Nix builds run as in the agent image.
+RUN sh /tmp/tool-users.sh 16 10100 \
+ && useradd --no-log-init --no-create-home --uid 10001 --user-group --shell /usr/sbin/nologin octopushy-agent \
+ && rm /tmp/tool-users.sh

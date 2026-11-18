@@ -154,16 +154,27 @@ impl AttemptManager {
     }
 
     pub fn set_concurrency(&self, max: u32) {
-        let max = if !self.exec.runtime.is_container() {
-            tracing::warn!(
-                requested = max,
-                "local tools share the agent user; limiting concurrency to one attempt"
-            );
-            1
-        } else {
-            max
+        let runtime = &self.exec.runtime;
+        let max = match &runtime.users {
+            _ if runtime.is_container() => max as usize,
+            Some(pool) if pool.size() < max as usize => {
+                tracing::info!(
+                    requested = max,
+                    users = pool.size(),
+                    "each attempt runs its tools as a user of its own; limiting concurrency to the users there are"
+                );
+                pool.size()
+            }
+            Some(_) => max as usize,
+            None => {
+                tracing::warn!(
+                    requested = max,
+                    "local tools share the agent user; limiting concurrency to one attempt"
+                );
+                1
+            }
         };
-        self.limiter.set_limit(max as usize);
+        self.limiter.set_limit(max);
     }
 
     pub fn concurrency(&self) -> usize {
@@ -300,6 +311,34 @@ impl AttemptManager {
             }
             p = self.limiter.acquire() => p,
         };
+        // A user of its own for the attempt's tools, when the runtime gives each one.
+        let lease = match self
+            .exec
+            .runtime
+            .users
+            .as_ref()
+            .filter(|_| !self.exec.runtime.is_container())
+        {
+            None => None,
+            Some(pool) => {
+                let lease = tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => {
+                        log.agent("cancelled before it started");
+                        self.finish(&id, result(&id, Outcome::Cancelled, "cancelled before it started"));
+                        return;
+                    }
+                    l = pool.lease(&assignment.executor) => l,
+                };
+                match lease {
+                    Ok(lease) => lease,
+                    Err(e) => {
+                        self.finish(&id, failed(&id, &format!("{e:#}")));
+                        return;
+                    }
+                }
+            }
+        };
         if let Err(e) = workspace::mark_running(&ws) {
             self.finish(
                 &id,
@@ -336,6 +375,7 @@ impl AttemptManager {
             cancel: cancel.clone(),
             mutating,
             snapshots,
+            tool_user: lease.as_ref().map(|l| l.user()),
         };
         let started = Instant::now();
         let run = executors::run(&self.exec, &executor, &ctx);
@@ -379,6 +419,11 @@ impl AttemptManager {
         // Whatever the outcome, the state records what the apply did.
         if executor == "opentofu" && action == "apply" {
             res.artifacts.extend(state::read(&ctx.workspace));
+        }
+        // Nothing of the user's outlives the attempt, and the next attempt it runs for cannot
+        // reach this one's workspace.
+        if let Some(lease) = lease {
+            lease.release(&ctx.workspace).await;
         }
         let secs = started.elapsed().as_secs_f64();
         match res.outcome() {

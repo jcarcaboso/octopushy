@@ -223,6 +223,7 @@ async fn run(
         cancel,
         mutating: true,
         snapshots: Default::default(),
+        tool_user: None,
     };
     let result = executors::run(&fx.cfg, "opentofu", &ctx).await;
     let lines = buffer

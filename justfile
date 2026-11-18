@@ -52,6 +52,7 @@ validate dir *args:
 test:
     dotnet test backend/Octopushy.slnx
     cd agent && cargo test --workspace --locked
+    tests/tool-users/run.sh
     cd frontend && pnpm test
     bash scripts/checks/offline.sh
 
@@ -66,6 +67,10 @@ check:
     cd frontend && pnpm run build
     just openapi
     git diff --exit-code -- contracts/openapi/octopushy.json frontend/src/api/schema.d.ts
+
+# The agent's root-only tests (tools as users of their own), as root in a container. AGENT_IMAGE=<image> also checks a built agent image.
+test-tool-users:
+    tests/tool-users/run.sh
 
 # End to end: backend, a real agent running OpenTofu in rootless podman, and a mock Proxmox API.
 e2e: dev-db

@@ -296,10 +296,15 @@ passed. It always sends the run's own `node` and `vmid`.
 Runs OpenTofu in a container image (`image`), rootless, with only the attempt's
 workspace and the agent's provider cache mounted. The `local` tool runtime runs a
 `tofu` binary on the agent instead. The shipped agent image, Compose stack and
-Proxmox installer use `local`. Tools share the agent's user and are not sandboxed
-from its files. Local concurrency is capped at one attempt, even if the server
-allows more. Tool-written files must be regular files inside the workspace;
-agent reads reject links in every path component and enforce byte caps.
+Proxmox installer use `local`. There the agent starts as root and runs each
+attempt's tools as an unprivileged user of its own, from a fixed pool, which can
+reach its workspace and nothing else of the agent's or of another attempt's; such
+an agent runs as many attempts at once as the server allows, up to the pool's size.
+Each attempt then has its own provider cache in its workspace. An agent that is not
+root runs local tools as its own user, not sandboxed from its files, and caps local
+concurrency at one attempt. Tool-written files must be regular files inside the
+workspace with no other link; agent reads reject links in every path component and
+enforce byte caps.
 
 With a container runtime, the agent first pulls `image` unless the runtime has it, as a step of
 its own, tried up to three times. A pull that keeps failing fails the attempt as a pull, before
@@ -653,14 +658,16 @@ An attempt interrupted by an agent restart is `uncertain` once the playbook has 
 for other mutating actions, and `failed` before, as during the image pull. A run the controller
 sends as a read, `mutating` false, is `failed` either way (see [Restarts](#restarts)).
 With the `local` runtime the agent removes `/tmp/octopushy-attempt-<id>` afterwards, and on
-restart for attempts it lost.
+restart for attempts it lost. When the attempt has a user of its own, that folder is
+`/tmp/octopushy-secrets/<id>`, made by the agent for that user alone.
 
 ## `nix`
 
 Builds a flake output: a built template's image. The agent advertises `nix` only when the
 tool runtime is `local`, `nix --version` works, and the file system holding the Nix store
 has at least `OCTOPUSHY_NIX_MIN_FREE_GB` free (20 by default). That is how a small agent
-stays out of builds without labels.
+stays out of builds without labels. An agent running as root builds as the store's owner, never
+root, one build at a time, and uploads only a regular file of that user's in the store.
 
 ### `build`
 

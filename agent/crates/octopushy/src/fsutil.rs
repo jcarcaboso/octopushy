@@ -6,51 +6,63 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path};
 
 use anyhow::{Context, Result, bail};
 
-/// Reads a tool-written regular file beneath the workspace. Walk directory FDs
-/// without following any symlink, so replacing a parent while we open it cannot
-/// redirect the read. O_NONBLOCK avoids hanging on a hostile FIFO before fstat.
+/// Opens a regular file beneath `base` that a tool wrote, or could have changed. Walks directory
+/// FDs without following any symlink, so replacing a parent while we open it cannot redirect the
+/// open; `base` itself is the agent's to name. O_NONBLOCK avoids hanging on a hostile FIFO
+/// before fstat. A file with another link is refused: it can be a link the tool made to a file
+/// of the agent's that it cannot read itself, which the agent, reading as root, could.
+pub fn open_tool_file(base: &Path, path: &Path) -> Result<File> {
+    let relative = path
+        .strip_prefix(base)
+        .context("file is outside the workspace")?;
+    let parts = relative
+        .components()
+        .map(|c| match c {
+            Component::Normal(name) => Ok(name),
+            _ => anyhow::bail!("file path must stay inside the workspace"),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if parts.is_empty() {
+        bail!("expected a regular file inside the workspace");
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(base)?;
+    for (index, part) in parts.iter().enumerate() {
+        let name = CString::new(part.as_bytes())?;
+        let mut flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
+        if index + 1 != parts.len() {
+            flags |= libc::O_DIRECTORY;
+        }
+        // SAFETY: the directory FD and NUL-terminated name live through openat.
+        let fd = unsafe { libc::openat(file.as_raw_fd(), name.as_ptr(), flags) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        // SAFETY: openat returned a new FD, now owned only by this File.
+        file = unsafe { File::from_raw_fd(fd) };
+    }
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        bail!("expected a regular file, not a directory or special file");
+    }
+    if metadata.nlink() != 1 {
+        bail!("expected a file with no other links");
+    }
+    Ok(file)
+}
+
+/// Reads a tool-written regular file beneath the workspace, opened as [`open_tool_file`] does.
 pub fn read_tool_file(workspace: &Path, path: &Path, cap: usize) -> Result<Vec<u8>> {
     let read = || -> Result<Vec<u8>> {
-        let relative = path
-            .strip_prefix(workspace)
-            .context("file is outside the workspace")?;
-        let parts = relative
-            .components()
-            .map(|c| match c {
-                Component::Normal(name) => Ok(name),
-                _ => anyhow::bail!("file path must stay inside the workspace"),
-            })
-            .collect::<Result<Vec<_>>>()?;
-        if parts.is_empty() {
-            bail!("expected a regular file inside the workspace");
-        }
-        let mut file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(workspace)?;
-        for (index, part) in parts.iter().enumerate() {
-            let name = CString::new(part.as_bytes())?;
-            let mut flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
-            if index + 1 != parts.len() {
-                flags |= libc::O_DIRECTORY;
-            }
-            // SAFETY: the directory FD and NUL-terminated name live through openat.
-            let fd = unsafe { libc::openat(file.as_raw_fd(), name.as_ptr(), flags) };
-            if fd < 0 {
-                return Err(std::io::Error::last_os_error().into());
-            }
-            // SAFETY: openat returned a new FD, now owned only by this File.
-            file = unsafe { File::from_raw_fd(fd) };
-        }
+        let file = open_tool_file(workspace, path)?;
         let metadata = file.metadata()?;
-        if !metadata.is_file() {
-            bail!("expected a regular file, not a directory or special file");
-        }
         if metadata.len() > cap as u64 {
             bail!("file exceeds the {cap} byte cap");
         }
@@ -169,6 +181,11 @@ mod tests {
         // SAFETY: name is a valid NUL-terminated path.
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
         assert!(read_tool_file(&ws, &fifo, 3).is_err());
+        // A second link to a file may name one outside, which the tool could not read itself.
+        fs::write(dir.path().join("agent-file"), b"key").unwrap();
+        fs::hard_link(dir.path().join("agent-file"), ws.join("hard")).unwrap();
+        let err = read_tool_file(&ws, &ws.join("hard"), 3).unwrap_err();
+        assert!(format!("{err:#}").contains("no other links"), "{err:#}");
     }
 
     #[test]

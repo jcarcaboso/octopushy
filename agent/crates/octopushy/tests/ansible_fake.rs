@@ -186,6 +186,7 @@ async fn exec(
         cancel: CancellationToken::new(),
         mutating: true,
         snapshots: Snapshots::default(),
+        tool_user: None,
     };
     let result = executors::run(&fx.cfg, "ansible", &ctx).await;
     let mut log = String::new();
@@ -1044,6 +1045,7 @@ async fn the_limit_still_applies_while_output_is_held_open() {
         capture_stdout: false,
         stderr_mark: None,
         control_prefix: None,
+        user: None,
     };
     let out = fx.cfg.runtime.run(invocation, &log, &stop).await.unwrap();
     assert!(
@@ -1096,6 +1098,7 @@ async fn a_container_runtime_that_stops_answering_cannot_hold_the_run_open() {
         capture_stdout: false,
         stderr_mark: None,
         control_prefix: None,
+        user: None,
     };
     let out = tokio::time::timeout(
         Duration::from_secs(10),

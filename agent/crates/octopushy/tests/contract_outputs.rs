@@ -155,6 +155,7 @@ async fn exec(
         log: AttemptLogger::new(buffer.clone(), masker, Arc::new(Notify::new())),
         cancel: CancellationToken::new(),
         snapshots: Default::default(),
+        tool_user: None,
     };
     match executors::run(cfg, executor, &ctx).await {
         Ok(success) => success,

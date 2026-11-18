@@ -166,15 +166,25 @@ pub async fn run(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     }
 }
 
+/// Where an attempt that has a user of its own keeps its secrets: a folder of the agent's, so no
+/// other user can make the attempt's folder before it does.
+const ISOLATED_SECRETS: &str = "/tmp/octopushy-secrets";
+
 /// Where the `local` runtime's program keeps an attempt's secrets. It removes them itself; this
 /// is for when it could not.
-fn secret_dir(attempt: &str) -> PathBuf {
-    PathBuf::from(format!("{SECRET_DIR_PREFIX}{attempt}"))
+fn secret_dir(attempt: &str, isolated: bool) -> PathBuf {
+    if isolated {
+        Path::new(ISOLATED_SECRETS).join(attempt)
+    } else {
+        PathBuf::from(format!("{SECRET_DIR_PREFIX}{attempt}"))
+    }
 }
 
 /// Removes what a run that was killed left. A container takes its tmpfs with it.
 pub fn remove_secret_dir(attempt: &str) {
-    let _ = fs::remove_dir_all(secret_dir(attempt));
+    for isolated in [false, true] {
+        let _ = fs::remove_dir_all(secret_dir(attempt, isolated));
+    }
 }
 
 /// A relative path inside the repository, without `..`.
@@ -594,6 +604,7 @@ impl Ansible<'_> {
                     capture_stdout: capture,
                     stderr_mark: None,
                     control_prefix: Some(RECAP_PREFIX),
+                    user: self.ctx.tool_user,
                 },
                 &self.ctx.log,
                 stop,
@@ -996,10 +1007,19 @@ async fn run_playbook(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     args.push(tool.path(&prep.root.join(relative(&prep.input.playbook, "playbook")?))?);
 
     let mut settings = vec![("OCTOPUSHY_STDIN".to_owned(), "1".to_owned())];
+    let user = ctx.tool_user.filter(|_| !cfg.runtime.is_container());
+    let secrets = secret_dir(&ctx.attempt_id, user.is_some());
+    // In a folder of the agent's that only it can add to, made here for the attempt's user alone.
+    // The program empties it after each run but cannot remove it, so every run finds it.
+    if let Some(user) = user {
+        crate::tools::users::agent_dir(Path::new(ISOLATED_SECRETS))
+            .and_then(|()| crate::tools::users::private_dir(&secrets, user))
+            .map_err(|e| Failure::msg(format!("making the private folder for secrets: {e:#}")))?;
+    }
     if !cfg.runtime.is_container() {
         settings.push((
             "OCTOPUSHY_SECRET_DIR".to_owned(),
-            secret_dir(&ctx.attempt_id).to_string_lossy().into_owned(),
+            secrets.to_string_lossy().into_owned(),
         ));
     }
 

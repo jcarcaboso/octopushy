@@ -112,7 +112,13 @@ its database and hands it to the agent over their private channel, so `octopushy
 keeps it and its database dump covers it. Restoring that dump needs the key above.
 
 It runs OpenTofu and Ansible directly (`--tool-runtime local`) inside its own Docker
-container, as an unprivileged user. Ansible needs a route to the guests it configures,
+container. The agent starts as root there and runs each attempt's tools as an unprivileged
+user of its own, so attempts run side by side and none reaches the agent's key or another
+attempt's credentials; the container keeps only the six capabilities that takes
+(see [the safety boundary](../../docs/safety-boundary.md#tools-apart-from-the-agent-and-from-each-other)).
+An agent volume from an earlier release is taken over by root when the new agent starts; to
+go back to an older agent image after that, run
+`pct exec <ctid> -- sh -c 'octopushy-compose run --rm --no-deps --entrypoint chown agent -R 10001:10001 /var/lib/octopushy-agent'` first. Ansible needs a route to the guests it configures,
 and the `tmpfs` on `/tmp` that `compose.yaml` gives it. It shares only a private network with the backend, so it cannot
 reach PostgreSQL, and it gets neither the key nor the database password. The state it
 works on is decrypted for one attempt of the guest it was assigned. It still runs

@@ -66,7 +66,7 @@ octopushy version
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--state-dir` | see below | enrollment, outbox, workspaces, provider cache |
+| `--state-dir` | see below | enrollment, outbox, workspaces, provider cache (as root with `local`: `root 0711`, its contents private) |
 | `--tool-runtime` | `podman` | how OpenTofu and Ansible run |
 | `--tofu-binary` | `tofu` | the binary for `--tool-runtime local` |
 | `--ansible-binary` | `octopushy-ansible` | the program for `--tool-runtime local` |
@@ -98,7 +98,9 @@ A successful version probe does not prove image pulls, provider access or backen
 connectivity. `nix` is offered only with the `local` runtime, when `nix --version` works and the
 file system holding `/nix` has `OCTOPUSHY_NIX_MIN_FREE_GB` (20) free.
 After a build the store is collected down to `OCTOPUSHY_NIX_STORE_MAX_GB` (40). The agent
-image carries a single-user Nix 2.34 owned by the agent's user, without a sandbox.
+image carries a single-user Nix 2.34 owned by `octopushy-agent` (10001), without a sandbox;
+the agent, as root, runs builds and the `nix` probe as that user, never as root. Other probes
+run as `nobody`.
 
 `octopushy agent doctor` takes the flags of `run`, makes the same probes and prints one
 line per executor, available or why not, then free disk and cache sizes, the Nix store's
@@ -166,7 +168,10 @@ work/<attempt>/        attempt workspace:
   repo/                  extracted repository files
   out/plan.bin           saved plan
   home/                  HOME for OpenTofu (its .terraform.d lands here)
-cache/providers/       OpenTofu provider cache (TF_PLUGIN_CACHE_DIR), shared
+  plugin-cache/          the provider cache, with a user per attempt
+cache/providers/       OpenTofu provider cache (TF_PLUGIN_CACHE_DIR), shared, unless
+                       each attempt has a user of its own
+cache/nix/             Nix's caches, the store owner's
 ```
 
 **Outbox and restart recovery.** A result is written to the outbox (temp file,
@@ -240,10 +245,23 @@ shared checkout is required. See the opt-in
   `--user <uid>:<gid>` and warns, because access to a rootful daemon equals root.
 - **local**: runs `--tofu-binary` directly with a cleared environment (only `PATH`
   is kept). The shipped agent container, Compose stack and Proxmox installer use
-  this mode. Tools run as the agent's own user, without a per-attempt OS boundary.
-  The agent limits local concurrency to one, regardless of the server's limit,
-  to prevent tools in different attempts from running alongside each other. This
-  is not a sandbox. Use only trusted tools until per-attempt isolation is available.
+  this mode. How tools are kept apart depends on who the agent runs as, and it logs
+  which at start (`tool runtime local, isolated` or `shared`):
+  - **As root** (the agent image's default), each attempt's tools run as an
+    unprivileged user of its own, `octopushy-tool-<n>` from
+    [`packaging/tool-users.sh`](packaging/tool-users.sh), with no other groups, no
+    capabilities and `no_new_privs`. The user owns its workspace's contents and nothing
+    else; the agent's state is root's and private. Nix builds run as the store's owner,
+    one at a time. Attempts run in parallel, up to the server's `max_concurrency` and the
+    number of users. When an attempt ends every process of its user is killed and what
+    it left in `/tmp` and the like is removed before another attempt gets it. As root
+    without those users the agent refuses to start. See
+    [the safety boundary](../docs/safety-boundary.md#tools-apart-from-the-agent-and-from-each-other).
+  - **As any other user** (`just agent`, or the image with `--user`), tools run as the
+    agent's own user, which can read the agent's files, one attempt at a time whatever
+    the server allows. This is not a sandbox; use it for development and trusted code.
+    An image whose state directory a root agent has taken over needs a `chown` before
+    it runs as another user again.
 
 Tool-written plans, lock files, prepared variables and state are read with byte
 caps, without following file or directory links, and must be regular files inside
@@ -301,7 +319,8 @@ announces `ansible` only if the program works. See
   a command line, into tracing logs, or into `Debug` output (the Proxmox token type
   redacts itself). The full assignment is never logged.
 - Tools run in rootless containers with only the attempt workspace and the provider
-  cache mounted; the agent's identity and outbox are not mounted.
+  cache mounted; the agent's identity and outbox are not mounted. With `local` and the
+  agent as root, they run as a user of their own per attempt, as above.
 - The example unit [`packaging/octopushy-agent.service`](packaging/octopushy-agent.service)
   is as strict as rootless podman allows and documents each relaxation
   (`NoNewPrivileges=no` for newuidmap, namespaces, `/dev/fuse`, `/dev/net/tun`,
@@ -347,6 +366,16 @@ certificate for 127.0.0.1, ::1, and localhost; `--ca-out` writes the CA for
   fingerprint and token; renewal and reconnect with the new certificate; restart
   recovery and outbox resend; attempts surviving a server-side disconnect;
   cancellation; unknown executors.
+- `tests/tool_users.rs` (ignored unless root): tools as users of their own. A tool tries to
+  read the agent's key, outbox and work directory, a neighbouring attempt's workspace and the
+  agent's `/proc`, and to write its own marker and change record, and fails at each; two
+  attempts run side by side; nothing of a user's outlives its attempt; a stopped tool takes
+  every process of its user with it; probes never run as root; a Nix build cannot get the
+  agent to upload its key. As root in a container, with the image's tool users:
+
+  ```sh
+  tests/tool-users/run.sh              # AGENT_IMAGE=<image> also checks a built image
+  ```
 - `tests/opentofu_fake.rs`: the opentofu executor with the local runtime and a fake
   `tofu` script that records arguments and environment (secrets in the environment,
   never in arguments; outputs; artifact contents; destroy; replace counting; lock-file

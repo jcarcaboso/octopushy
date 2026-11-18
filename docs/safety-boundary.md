@@ -259,6 +259,60 @@ the policy says, with how to migrate it instead. An edit in the form refuses a h
 installation does not list, and one without snippets for a guest whose host key is
 Octopushy's, which would otherwise be replaced.
 
+## Tools apart from the agent and from each other
+
+The agent image runs OpenTofu, Ansible and Nix directly (`--tool-runtime local`). Code from the
+repository runs inside them with the attempt's credentials, and that is accepted below. What it
+must not reach is the agent's own identity and files, or another attempt's credentials: a
+preview must not read what an apply holds.
+
+So the agent starts as root and runs each attempt's tools as an unprivileged user of its own,
+leased from a fixed pool in the image (`octopushy-tool-0` to `-15`). Before it runs a tool:
+
+- **The drop is complete.** Real, effective and saved user and group IDs are the user's, there
+  are no supplementary groups, no capabilities, and `no_new_privs` is set, so no set-user-ID
+  program leads back. The child checks all of it, and that `setuid(0)` fails, before it runs the
+  tool. Files the tool creates are its own alone (umask 077). A set-user-ID or set-group-ID
+  bit on a program a tool runs is ignored; none of OpenTofu, Ansible, ssh or Nix needs one.
+- **It reaches its workspace and nothing else.** The state and work directories are root's and
+  can be passed through but not listed (0711); the identity key, certificate, outbox (stored
+  results, plan artifacts) and everything else in them is root's and private. A workspace is
+  `root:<its user's group>` 0750: the user cannot add, rename or remove its entries, so the
+  marker and the `.change-started` record beside the workspace stay the agent's, as does
+  `ansible/`, which the agent writes into between runs. Another attempt's workspace belongs to
+  another user. The agent's process cannot be read through `/proc` or signalled by a tool.
+- **No shared cache.** Each attempt has its own OpenTofu provider cache in its workspace, as a
+  shared one would let one attempt plant a provider another runs. Providers are downloaded for
+  each attempt.
+- **What the agent reads back is hostile input.** It opens a file a tool wrote without following
+  a link in any path component, refuses a file with another link (a link to a file of the
+  agent's), and caps its size. Nothing of the user's runs while it does: every process of the
+  user is killed when the tool exits.
+
+When the attempt ends, every process of its user is killed (`kill(-1)` as that user, until
+`/proc` shows none), the workspace is taken back (root, 0700), and whatever the user owns in
+`/tmp`, `/var/tmp`, `/dev/shm`, `/dev/mqueue` and `/run/lock`, and its System V IPC objects, are
+removed. Only then may another attempt get the user. A user whose processes survive SIGKILL is
+never leased again. Cancelling or timing out a tool still signals its process group first, and
+the hard kill takes every process of its user. At start the agent kills whatever a previous
+process left running as a tool user, and takes over the state directory of an agent that ran
+as an unprivileged user before.
+
+**Nix is kept apart from the agent and from other tools, not from other builds.** Its
+single-user store belongs to one user, the image's `octopushy-agent` (10001), which every build
+must write to. Builds run as that user, never root, one at a time, and the agent uploads only a
+regular file of that user's inside the store. A build can still change what is in the store for
+the next one, as before.
+
+**An agent that is not root cannot drop.** A development agent, or the image run with
+`--user`, runs every tool as its own user, which can read the agent's files, and runs one
+attempt at a time whatever the server allows. It says which mode it is in when it starts. As
+root without the pool's users it refuses to start rather than run tools as root.
+
+The container needs only `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `KILL`, `SETUID` and `SETGID`, and
+runs with `no-new-privileges`; Compose drops every other capability. The container runtimes
+(`podman`, `docker`) are unchanged: each tool runs in a rootless container of its own.
+
 ## Threat model and accepted limits
 
 The guards assume one operator who writes all the Git code, and they stop that

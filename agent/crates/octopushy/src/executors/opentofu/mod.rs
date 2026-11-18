@@ -11,6 +11,8 @@
 //!   out/plan.bin   the saved plan
 //!   home/          HOME for OpenTofu; home/.ssh/known_hosts holds the input's `knownHosts`
 //!   tmp/           TMPDIR (local runtime only; containers get a tmpfs)
+//!   plugin-cache/  the provider cache, when each attempt has a user of its own: a cache shared
+//!                  with other attempts would let one plant a provider another runs
 //! ```
 //!
 //! A built template's image, when the input names `templateImage`, is fetched into
@@ -169,6 +171,7 @@ struct Prepared {
     input: Input,
     root: PathBuf,
     out_dir: PathBuf,
+    plugin_cache: PathBuf,
     settings: Vec<(String, String)>,
     env: Vec<(String, String)>,
     deadline: Instant,
@@ -211,12 +214,17 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         crate::fsutil::write_atomic(&ssh.join("known_hosts"), known.as_bytes(), 0o600)
             .map_err(|e| Failure::msg(format!("writing known_hosts: {e}")))?;
     }
+    let plugin_cache = if ctx.tool_user.is_some() {
+        ws.join("plugin-cache")
+    } else {
+        cfg.provider_cache.clone()
+    };
     let mut settings: Vec<(String, String)> = vec![
         ("TF_IN_AUTOMATION".into(), "1".into()),
         ("TF_INPUT".into(), "0".into()),
         (
             "TF_PLUGIN_CACHE_DIR".into(),
-            rt.plugin_cache_path(&cfg.provider_cache),
+            rt.plugin_cache_path(&plugin_cache),
         ),
         ("HOME".into(), rt.path(ws, &home)?),
     ];
@@ -242,7 +250,7 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         env.push((k.clone(), ctx.secrets.get(secret)?.to_owned()));
         names.push(format!("{k} (secret)"));
     }
-    fs::create_dir_all(&cfg.provider_cache)
+    fs::create_dir_all(&plugin_cache)
         .map_err(|e| Failure::msg(format!("creating the provider cache: {e}")))?;
 
     // Repository.
@@ -297,6 +305,7 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         input,
         root,
         out_dir,
+        plugin_cache,
         settings,
         env,
         deadline,
@@ -394,7 +403,7 @@ impl Tofu<'_> {
                 image: &self.prep.input.image,
                 workspace: &self.ctx.workspace,
                 workdir: &self.prep.root,
-                plugin_cache: Some(&self.cfg.provider_cache),
+                plugin_cache: Some(&self.prep.plugin_cache),
                 args,
                 settings: self.prep.settings.clone(),
                 env: self.prep.env.clone(),
@@ -402,6 +411,7 @@ impl Tofu<'_> {
                 capture_stdout: capture,
                 stderr_mark: (step == "apply").then_some(state::NOT_SAVED),
                 control_prefix: None,
+                user: self.ctx.tool_user,
             },
             &self.ctx.log,
             &stop,

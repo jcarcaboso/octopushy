@@ -14,11 +14,13 @@
 //! another agent's sharing the runtime.
 
 mod lines;
+pub mod users;
 
 use std::io::Write;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -29,6 +31,7 @@ use tokio::task::{JoinError, JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::attempts::logs::AttemptLogger;
+use users::{ToolUser, UserPool};
 
 /// Where the attempt workspace appears inside a container.
 pub const CONTAINER_WORKSPACE: &str = "/work";
@@ -115,6 +118,9 @@ pub struct ToolRuntime {
     pub memory_limit: Option<String>,
     /// Refuse an image that is not named by digest (`...@sha256:<64 hex>`).
     pub require_image_digest: bool,
+    /// With the `local` runtime as root: the users tools run as, one per attempt. `None`: tools
+    /// run as the agent's own user, which then takes one attempt at a time.
+    pub users: Option<Arc<UserPool>>,
     docker_rootless: OnceCell<bool>,
 }
 
@@ -151,6 +157,8 @@ pub struct Invocation<'a> {
     /// Stderr lines starting with this are the tool talking to the agent, not output: they
     /// are held back from the log, unmasked, and the last is [`ToolOutput::control`].
     pub control_prefix: Option<&'a str>,
+    /// The attempt's own user, with the `local` runtime as root; see [`users`].
+    pub user: Option<ToolUser>,
 }
 
 /// What a tool run produced. `Debug` leaves out what was not masked.
@@ -225,6 +233,7 @@ impl ToolRuntime {
             pids_limit: Some(DEFAULT_PIDS_LIMIT),
             memory_limit: None,
             require_image_digest: false,
+            users: None,
             docker_rootless: OnceCell::new(),
         }
     }
@@ -347,7 +356,7 @@ impl ToolRuntime {
             RuntimeKind::Local => (&self.tofu_binary, &["version"]),
             _ => (&self.container_binary, &["--version"]),
         };
-        version_line(bin, args).await
+        version_line(bin, args, self.probe_user()).await
     }
 
     /// Whether Ansible can run. A container runtime pulls its image when it is needed.
@@ -355,7 +364,7 @@ impl ToolRuntime {
         if self.is_container() {
             return Ok("from its image".to_owned());
         }
-        version_line(&self.ansible_binary, &["--version"]).await
+        version_line(&self.ansible_binary, &["--version"], self.probe_user()).await
     }
 
     /// Whether `nix` can run: only directly, never in a container.
@@ -363,7 +372,22 @@ impl ToolRuntime {
         if self.is_container() {
             bail!("nix runs only with the local tool runtime");
         }
-        version_line(&self.nix_binary, &["--version"]).await
+        let user = match &self.users {
+            // Never root: the Nix store, and the program in it, are its owner's to change.
+            Some(pool) => Some(pool.nix_user().context(
+                "the Nix store is root's; builds run as its owner, which must be an unprivileged user",
+            )?),
+            None => None,
+        };
+        version_line(&self.nix_binary, &["--version"], user).await
+    }
+
+    /// Who a local probe runs as: nobody, when the agent is root.
+    fn probe_user(&self) -> Option<ToolUser> {
+        self.users
+            .as_ref()
+            .filter(|_| !self.is_container())
+            .map(|p| p.probe_user())
     }
 
     fn local_binary(&self, tool: Tool) -> &Path {
@@ -519,6 +543,13 @@ impl ToolRuntime {
         match self.kind {
             RuntimeKind::Local => {
                 cmd = Command::new(self.local_binary(inv.tool));
+                match (inv.user, &self.users) {
+                    (Some(user), Some(_)) => user.apply(&mut cmd),
+                    (None, None) => {}
+                    // Never as root, and never as a user the agent did not lease.
+                    (None, Some(_)) => bail!("no user of its own to run the tool as"),
+                    (Some(_), None) => bail!("this agent runs every tool as its own user"),
+                }
                 cmd.args(&inv.args).current_dir(inv.workdir).env_clear();
                 if let Some(path) = std::env::var_os("PATH") {
                     cmd.env("PATH", path);
@@ -626,6 +657,15 @@ impl ToolRuntime {
     ) -> Result<ToolOutput> {
         log.agent(format!("$ {} {}", inv.tool.label(), inv.args.join(" ")));
         let (mut cmd, env_file) = self.command(&inv).await?;
+        // Only a user the pool leased: `command` refused anything else.
+        let user = inv.user.filter(|_| !self.is_container());
+        if let Some(user) = user {
+            let ws = inv.workspace.to_path_buf();
+            tokio::task::spawn_blocking(move || users::hand_over(&ws, user))
+                .await
+                .context("handing the workspace over")?
+                .context("handing the workspace over to the tool's user")?;
+        }
         let mut child = cmd.spawn().with_context(|| match self.kind {
             RuntimeKind::Local => {
                 format!("cannot start {}", self.local_binary(inv.tool).display())
@@ -695,16 +735,21 @@ impl ToolRuntime {
         let status = tokio::select! {
             status = child.wait() => status?,
             _ = capture_failed.cancelled() => {
-                self.terminate(&mut child, &inv.name, inv.tool).await;
+                self.terminate(&mut child, &inv.name, inv.tool, user).await;
                 child.wait().await?
             }
             _ = cancel.cancelled() => {
                 cancelled = true;
                 log.agent("stopping the tool");
-                self.terminate(&mut child, &inv.name, inv.tool).await;
+                self.terminate(&mut child, &inv.name, inv.tool, user).await;
                 child.wait().await?
             }
         };
+        // The tool has ended, and nothing it started outlives it: the agent then reads what it
+        // left, and writes beside it, with no process of the user's still changing it.
+        if let Some(user) = user {
+            kill_user(user).await;
+        }
         // Something the tool left behind can hold its pipes open after it exits, so the limit
         // has to keep applying until the output has ended. What was read by then decides nothing:
         // a stopped run is uncertain.
@@ -714,7 +759,7 @@ impl ToolRuntime {
             _ = async { tokio::select! { _ = cancel.cancelled() => {}, _ = capture_failed.cancelled() => {} } } => {
                 cancelled |= cancel.is_cancelled();
                 log.agent("stopping what the tool left running");
-                self.kill_group(&inv.name, pgid).await;
+                self.kill_group(&inv.name, pgid, user).await;
                 let rest = drain(&mut out_task, &mut err_task, &mut out_read, &mut err_read);
                 if tokio::time::timeout(self.kill_grace, rest).await.is_err() {
                     out_task.abort();
@@ -744,7 +789,13 @@ impl ToolRuntime {
     /// OpenTofu gets SIGINT first so it can finish in-flight work and save state.
     /// After one grace period, escalate to SIGTERM, then a hard kill. Other tools
     /// start at SIGTERM. Waiting stays bounded even when a container CLI hangs.
-    async fn terminate(&self, child: &mut Child, container: &str, tool: Tool) {
+    async fn terminate(
+        &self,
+        child: &mut Child,
+        container: &str,
+        tool: Tool,
+        user: Option<ToolUser>,
+    ) {
         let Some(pid) = child.id() else { return };
         let pgid = pid as libc::pid_t;
         if tool == Tool::OpenTofu {
@@ -765,7 +816,7 @@ impl ToolRuntime {
         {
             return;
         }
-        self.kill_group(container, Some(pgid)).await;
+        self.kill_group(container, Some(pgid), user).await;
     }
 
     async fn signal_group(&self, container: &str, pgid: libc::pid_t, signal: i32, name: &str) {
@@ -787,8 +838,14 @@ impl ToolRuntime {
         }
     }
 
-    /// A hard kill of the container and the process group.
-    pub(crate) async fn kill_group(&self, container: &str, pgid: Option<libc::pid_t>) {
+    /// A hard kill of the container and the process group, and of every process of the tool's
+    /// own user, wherever it moved.
+    pub(crate) async fn kill_group(
+        &self,
+        container: &str,
+        pgid: Option<libc::pid_t>,
+        user: Option<ToolUser>,
+    ) {
         if self.is_container() {
             // A runtime that stops answering must not keep the run from ending.
             let kill = Command::new(&self.container_binary)
@@ -806,8 +863,27 @@ impl ToolRuntime {
                 libc::kill(-pgid, libc::SIGKILL);
             }
         }
+        if let Some(user) = user {
+            kill_user(user).await;
+        }
     }
 }
+
+/// Kills every process of `user`, off the async threads.
+async fn kill_user(user: ToolUser) {
+    let killed = tokio::task::spawn_blocking(move || users::kill_all(user, KILL_USER_TIMEOUT))
+        .await
+        .unwrap_or(false);
+    if !killed {
+        tracing::error!(
+            uid = user.uid,
+            "processes of the tool's user survive SIGKILL"
+        );
+    }
+}
+
+/// How long the processes of a tool's user may take to die.
+const KILL_USER_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Whether `image` is named by digest: `name[:tag]@sha256:<64 lowercase hex>`.
 pub fn is_pinned(image: &str) -> bool {
@@ -881,8 +957,18 @@ async fn drain<A, B>(
 
 /// The first line of `<bin> args`' stdout, within [`PROBE_TIMEOUT`]. The program is killed when
 /// it takes longer. Its stderr is never kept: an error names the program and how it exited.
-async fn version_line(bin: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new(bin)
+async fn version_line(bin: &Path, args: &[&str], user: Option<ToolUser>) -> Result<String> {
+    let mut cmd = Command::new(bin);
+    if let Some(user) = user {
+        user.apply(&mut cmd);
+        // Nothing of the agent's environment, as for a tool.
+        cmd.env_clear();
+        if let Some(path) = std::env::var_os("PATH") {
+            cmd.env("PATH", path);
+        }
+        cmd.current_dir("/");
+    }
+    let out = cmd
         .args(args)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -962,6 +1048,7 @@ mod tests {
             capture_stdout: false,
             stderr_mark: None,
             control_prefix: None,
+            user: None,
         };
         let output = tokio::time::timeout(
             Duration::from_secs(5),
@@ -1038,6 +1125,7 @@ mod tests {
             capture_stdout: false,
             stderr_mark: None,
             control_prefix: None,
+            user: None,
         }
     }
 
@@ -1184,6 +1272,27 @@ mod tests {
         ] {
             assert_eq!(is_pinned(image), pinned, "{image}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_local_tool_runs_only_as_the_user_its_attempt_leased() {
+        use users::{ToolUser, UserPool};
+        let ws = PathBuf::from("/srv/work/att-1");
+        let cache = PathBuf::from("/srv/cache");
+        let user = |id| ToolUser { uid: id, gid: id };
+        let mut rt = ToolRuntime::new(RuntimeKind::Local, None, "tofu".into(), None);
+        let mut inv = tofu_invocation(&ws, &ws, &cache);
+        inv.user = Some(user(4_200_001));
+        let err = rt.command(&inv).await.unwrap_err().to_string();
+        assert!(err.contains("its own user"), "{err}");
+        rt.users = Some(Arc::new(
+            UserPool::new(vec![user(4_200_001)], None, user(65534), vec![]).unwrap(),
+        ));
+        assert!(rt.command(&inv).await.is_ok());
+        // Never as root, the agent's own user here.
+        inv.user = None;
+        let err = rt.command(&inv).await.unwrap_err().to_string();
+        assert!(err.contains("no user of its own"), "{err}");
     }
 
     #[tokio::test]
