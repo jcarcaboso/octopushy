@@ -93,6 +93,17 @@ jobs:
           cargo install cargo-audit --version 0.22.2 --locked
           cargo audit
 
+  tool-users:
+    # Tools as users of their own: tests that need root, run as root in a container.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Root-only agent tests in a container
+        run: ENGINE=docker tests/tool-users/run.sh
+
   frontend:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

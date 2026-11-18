@@ -71,6 +71,7 @@ async fn podman_tofu_version() {
                 stdin: None,
                 capture_stdout: true,
                 control_prefix: None,
+                user: None,
                 stderr_mark: None,
             },
             &log,
@@ -138,6 +139,7 @@ output "secret" {
             cancel: CancellationToken::new(),
             mutating: true,
             snapshots: Default::default(),
+            tool_user: None,
         };
         let cfg = &cfg;
         async move {
@@ -230,6 +232,7 @@ async fn real_runtime_limits_env_file_and_leftovers() {
                 stdin: None,
                 capture_stdout: true,
                 control_prefix: None,
+                user: None,
                 stderr_mark: None,
             },
             &log,

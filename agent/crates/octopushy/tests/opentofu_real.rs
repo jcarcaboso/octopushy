@@ -95,6 +95,7 @@ async fn run(
         cancel: CancellationToken::new(),
         mutating: true,
         snapshots: Default::default(),
+        tool_user: None,
     };
     let result = executors::run(&cfg, "opentofu", &ctx).await;
     (

@@ -96,6 +96,12 @@ services:
     # Secrets of a guest's configuration stay in memory: Ansible refuses to run without this.
     tmpfs:
       - /tmp:size=128m,mode=1777
+    # It starts as root and runs each attempt's tools as a user of its own. These are all the
+    # privileges that takes: becoming those users (SETUID, SETGID), giving them their workspaces
+    # and taking them back (CHOWN, FOWNER, DAC_OVERRIDE), and stopping their processes (KILL).
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, KILL, SETGID, SETUID]
+    security_opt: [no-new-privileges:true]
     volumes:
       - agent:/var/lib/octopushy-agent
     networks: [agents]

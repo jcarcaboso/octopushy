@@ -166,15 +166,25 @@ pub async fn run(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     }
 }
 
+/// Where an attempt that has a user of its own keeps its secrets: a folder of the agent's, so no
+/// other user can make the attempt's folder before it does.
+const ISOLATED_SECRETS: &str = crate::tools::users::SECRETS_DIR;
+
 /// Where the `local` runtime's program keeps an attempt's secrets. It removes them itself; this
 /// is for when it could not.
-fn secret_dir(attempt: &str) -> PathBuf {
-    PathBuf::from(format!("{SECRET_DIR_PREFIX}{attempt}"))
+fn secret_dir(attempt: &str, isolated: bool) -> PathBuf {
+    if isolated {
+        Path::new(ISOLATED_SECRETS).join(attempt)
+    } else {
+        PathBuf::from(format!("{SECRET_DIR_PREFIX}{attempt}"))
+    }
 }
 
 /// Removes what a run that was killed left. A container takes its tmpfs with it.
 pub fn remove_secret_dir(attempt: &str) {
-    let _ = fs::remove_dir_all(secret_dir(attempt));
+    for isolated in [false, true] {
+        let _ = fs::remove_dir_all(secret_dir(attempt, isolated));
+    }
 }
 
 /// A relative path inside the repository, without `..`.
@@ -537,7 +547,28 @@ fn prepare(cfg: &ExecutorConfig, ctx: &ExecContext) -> Result<Prepared, Failure>
         Value::Object(input.vars.clone()).to_string().as_bytes(),
     )?;
 
-    let settings = vec![("HOME".to_owned(), tool_path(&home)?)];
+    let mut settings = vec![("HOME".to_owned(), tool_path(&home)?)];
+    if !rt.is_container() {
+        // Temporary files go with the workspace: no tool user can write to /tmp.
+        let tmp = ws.join("tmp");
+        create(&tmp)?;
+        for name in ["TMPDIR", "TMP", "TEMP"] {
+            settings.push((name.to_owned(), tmp.to_string_lossy().into_owned()));
+        }
+    }
+    // Every run of an attempt with a user of its own gets the private folder for secrets the
+    // program needs, in memory, made here for that user alone. The program empties it after each
+    // run but cannot remove it, so every run finds it.
+    if let Some(user) = ctx.tool_user.filter(|_| !rt.is_container()) {
+        let secrets = secret_dir(&ctx.attempt_id, true);
+        crate::tools::users::agent_dir(Path::new(ISOLATED_SECRETS))
+            .and_then(|()| crate::tools::users::private_dir(&secrets, user))
+            .map_err(|e| Failure::msg(format!("making the private folder for secrets: {e:#}")))?;
+        settings.push((
+            "OCTOPUSHY_SECRET_DIR".to_owned(),
+            secrets.to_string_lossy().into_owned(),
+        ));
+    }
     Ok(Prepared {
         input,
         root: canonical,
@@ -594,6 +625,7 @@ impl Ansible<'_> {
                     capture_stdout: capture,
                     stderr_mark: None,
                     control_prefix: Some(RECAP_PREFIX),
+                    user: self.ctx.tool_user,
                 },
                 &self.ctx.log,
                 stop,
@@ -764,13 +796,16 @@ async fn preview(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
                 format!("@{}", tool.generated("prepare.json")?),
                 target,
             ];
-            tool.run_ok(
-                "prepare",
-                args,
-                vec![("OCTOPUSHY_PREPARED_FILE".to_owned(), tool.path(&file)?)],
-                false,
-            )
-            .await?;
+            let mut settings = vec![("OCTOPUSHY_PREPARED_FILE".to_owned(), tool.path(&file)?)];
+            // The play runs on this machine, as the tool's user, whose home is no place to write:
+            // its remote temporary files go with the workspace too.
+            if !cfg.runtime.is_container() {
+                settings.push((
+                    "ANSIBLE_REMOTE_TMP".to_owned(),
+                    ctx.workspace.join("tmp").to_string_lossy().into_owned(),
+                ));
+            }
+            tool.run_ok("prepare", args, settings, false).await?;
             Some(read_prepared(&ctx.workspace, &file)?)
         }
     };
@@ -996,10 +1031,12 @@ async fn run_playbook(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     args.push(tool.path(&prep.root.join(relative(&prep.input.playbook, "playbook")?))?);
 
     let mut settings = vec![("OCTOPUSHY_STDIN".to_owned(), "1".to_owned())];
-    if !cfg.runtime.is_container() {
+    // With a user of its own, `prepare` made the attempt's private folder.
+    if !cfg.runtime.is_container() && ctx.tool_user.is_none() {
+        let secrets = secret_dir(&ctx.attempt_id, false);
         settings.push((
             "OCTOPUSHY_SECRET_DIR".to_owned(),
-            secret_dir(&ctx.attempt_id).to_string_lossy().into_owned(),
+            secrets.to_string_lossy().into_owned(),
         ));
     }
 

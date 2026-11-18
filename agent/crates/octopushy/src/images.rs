@@ -101,11 +101,22 @@ pub async fn upload(
     path: &Path,
     file_name: &str,
 ) -> Result<ImageDigest> {
-    check_file_name(file_name)?;
-    let mut client = link.client().await?;
     let file = tokio::fs::File::open(path)
         .await
         .with_context(|| format!("opening {}", path.display()))?;
+    upload_open(link, attempt_id, file, path, file_name).await
+}
+
+/// [`upload`] of a file already open; `path` names it in messages.
+pub async fn upload_open(
+    link: &ServerLink,
+    attempt_id: &str,
+    file: tokio::fs::File,
+    path: &Path,
+    file_name: &str,
+) -> Result<ImageDigest> {
+    check_file_name(file_name)?;
+    let mut client = link.client().await?;
     let size = file.metadata().await?.len();
     if size == 0 {
         bail!("{} is empty", path.display());

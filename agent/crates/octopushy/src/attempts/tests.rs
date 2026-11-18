@@ -188,6 +188,60 @@ async fn respects_concurrency() {
 }
 
 #[tokio::test]
+async fn local_runtime_runs_in_parallel_only_when_each_attempt_has_a_user() {
+    use crate::tools::users::{ToolUser, UserPool};
+    let user = |id| ToolUser { uid: id, gid: id };
+    let mut h = harness_runtime(RuntimeKind::Local);
+    let mut exec = ExecutorConfig {
+        runtime: ToolRuntime::new(RuntimeKind::Local, None, "false".into(), None),
+        provider_cache: h._dir.path().join("cache"),
+        poll_interval: Duration::from_millis(10),
+        proxmox_timeout: Duration::from_secs(1),
+        retry_delay: Duration::from_millis(1),
+        server: Default::default(),
+        nix: Default::default(),
+    };
+    exec.runtime.users = Some(Arc::new(
+        UserPool::new(
+            vec![user(4_100_001), user(4_100_002), user(4_100_003)],
+            None,
+            user(65534),
+            vec![],
+        )
+        .unwrap(),
+    ));
+    h.manager = AttemptManager::new(
+        h.work.clone(),
+        Outbox::open(&h.outbox_dir).unwrap(),
+        Arc::new(exec),
+    );
+    // As many as there are users, never more.
+    h.manager.set_concurrency(20);
+    assert_eq!(h.manager.concurrency(), 3);
+    h.manager.set_concurrency(2);
+    assert_eq!(h.manager.concurrency(), 2);
+    h.manager
+        .accept(assignment("p1", "test", "sleep", r#"{"ms":300}"#));
+    h.manager
+        .accept(assignment("p2", "test", "sleep", r#"{"ms":300}"#));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut c = Collector::default();
+    let started: Vec<String> = c
+        .poll(&h.manager)
+        .into_iter()
+        .filter_map(|m| match m.kind {
+            Some(Kind::Started(s)) => Some(s.attempt_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started, ["p1", "p2"], "both run at once");
+    assert_eq!(
+        c.result(&h.manager, "p2").await.outcome(),
+        Outcome::Succeeded
+    );
+}
+
+#[tokio::test]
 async fn cancels_reads_but_never_mutations() {
     let h = harness();
     h.manager.set_concurrency(2);

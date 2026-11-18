@@ -238,6 +238,8 @@ async fn build(cfg: &ExecutorConfig, ctx: &ExecContext) -> ExecResult {
     let mut settings = vec![
         ("HOME".to_owned(), home.to_string_lossy().into_owned()),
         ("TMPDIR".to_owned(), tmp.to_string_lossy().into_owned()),
+        ("TMP".to_owned(), tmp.to_string_lossy().into_owned()),
+        ("TEMP".to_owned(), tmp.to_string_lossy().into_owned()),
     ];
     if let Some(cache) = &cfg.nix.cache_dir {
         mk(cache)?;
@@ -290,6 +292,7 @@ async fn nix(
                 capture_stdout: capture,
                 stderr_mark: None,
                 control_prefix: None,
+                user: ctx.tool_user,
             },
             &ctx.log,
             &ctx.cancel,
@@ -371,6 +374,9 @@ async fn build_and_upload(
         started.elapsed().as_secs_f64()
     ));
 
+    if ctx.tool_user.is_some() {
+        check_store_path(&cfg.nix.store_dir, &out_path)?;
+    }
     let image = resolve_image(&out_path)?;
     let file_name = image
         .file_name()
@@ -378,14 +384,27 @@ async fn build_and_upload(
         .unwrap_or_default();
     images::check_file_name(&file_name)
         .map_err(|e| Failure::msg(format!("the image's name: {e:#}")))?;
-    let size = fs::metadata(&image).map(|m| m.len()).unwrap_or(0);
+    let file = match ctx.tool_user {
+        // The agent reads as root what the build's user printed: only a file of that user's in
+        // the store, reached without following a link.
+        Some(user) => open_built_image(&cfg.nix.store_dir, &image, user.uid)?,
+        None => fs::File::open(&image)
+            .map_err(|e| Failure::msg(format!("opening {}: {e}", image.display())))?,
+    };
+    let size = file.metadata().map(|m| m.len()).unwrap_or(0);
     ctx.log.agent(format!(
         "sending {} ({:.1} MiB) to the server",
         image.display(),
         size as f64 / (1024.0 * 1024.0)
     ));
     let started = Instant::now();
-    let upload = images::upload(&cfg.server, &ctx.attempt_id, &image, &file_name);
+    let upload = images::upload_open(
+        &cfg.server,
+        &ctx.attempt_id,
+        tokio::fs::File::from_std(file),
+        &image,
+        &file_name,
+    );
     let ImageDigest { sha256, size } = tokio::select! {
         r = upload => r.map_err(|e| Failure::msg(format!("sending the image: {e:#}")))?,
         _ = ctx.cancel.cancelled() => return Err(Failure::Cancelled),
@@ -400,6 +419,38 @@ async fn build_and_upload(
         "fileName": file_name,
         "outPath": out_path.to_string_lossy(),
     })))
+}
+
+/// Refuses an output path that is not a path in the store, `<store>/store/<name>`, or a store
+/// that is a link.
+fn check_store_path(store_dir: &Path, out_path: &Path) -> Result<(), Failure> {
+    let store = store_dir.join("store");
+    let in_store = out_path.parent() == Some(store.as_path()) && out_path.file_name().is_some();
+    if !in_store {
+        return Err(Failure::msg(format!(
+            "nix build printed {}, which is not a path in {}",
+            out_path.display(),
+            store.display()
+        )));
+    }
+    match fs::symlink_metadata(&store) {
+        Ok(m) if m.is_dir() => Ok(()),
+        _ => Err(Failure::msg(format!("{} is not a folder", store.display()))),
+    }
+}
+
+/// Opens the image a build of `uid`'s made, in the store, without following a link.
+fn open_built_image(store_dir: &Path, image: &Path, uid: u32) -> Result<fs::File, Failure> {
+    let file = crate::fsutil::open_tool_file(store_dir, image)
+        .map_err(|e| Failure::msg(format!("opening {}: {e:#}", image.display())))?;
+    let owner = file.metadata().map_err(anyhow::Error::from)?.uid();
+    if owner != uid {
+        return Err(Failure::msg(format!(
+            "{} is not the build's: it belongs to user {owner}",
+            image.display()
+        )));
+    }
+    Ok(file)
 }
 
 /// The image in a build output: the output itself if it is a regular file, or the one regular

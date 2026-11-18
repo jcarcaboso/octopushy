@@ -1,6 +1,8 @@
 # The agent image: the `octopushy` binary, OpenTofu, Ansible and Nix, which the agent runs
 # directly (`--tool-runtime local`), so it needs no container runtime of its own. The Compose
-# project runs it as the internal agent. Build from the repository root:
+# project runs it as the internal agent. The agent starts as root and runs each attempt's tools
+# as a user of its own from a fixed pool (packaging/tool-users.sh), Nix builds as the store's
+# owner; see docs/safety-boundary.md. Build from the repository root:
 #   podman build -f agent/Containerfile -t octopushy-agent:<version> .
 FROM docker.io/library/rust:1.98.1-trixie@sha256:a8a5f0a1e5fe7dfe1d352591e4a1c7dd2c08fd70475cae872cf3458ba0df0546 AS build
 WORKDIR /src
@@ -45,16 +47,26 @@ RUN install -d -m 0755 /etc/nix \
       'max-jobs = auto' \
       >/etc/nix/nix.conf
 COPY --from=build /src/agent/target/release/octopushy /usr/local/bin/octopushy
+COPY agent/packaging/tool-users.sh /tmp/tool-users.sh
+RUN sh /tmp/tool-users.sh 16 10100 && rm /tmp/tool-users.sh
 COPY --chmod=0755 agent/packaging/container-entrypoint.sh /usr/local/bin/octopushy-agent-entrypoint
 # The build fails unless a playbook run through octopushy-ansible ends with a recap.
 RUN printf -- '- hosts: localhost\n  gather_facts: false\n  tasks:\n    - ansible.builtin.debug: { msg: ok }\n' >/tmp/recap.yml \
  && OCTOPUSHY_RECAP=1 octopushy-ansible -i localhost, -c local /tmp/recap.yml 2>&1 >/dev/null | grep '^octopushy-recap: ' \
  && rm /tmp/recap.yml
-USER octopushy-agent
 # Nix last: its profile also holds coreutils and bash, which must not shadow Debian's.
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/nix/var/nix/profiles/default/bin
-# The build fails unless the agent's user can run Nix and evaluate an expression.
+# The build fails unless the store's owner, whom builds run as, can run Nix and evaluate an expression.
+USER octopushy-agent
 RUN nix --version && test "$(HOME=/tmp/nix-check nix eval --expr 1+1)" = 2 && rm -rf /tmp/nix-check
+# Root, so that it can run each attempt's tools as another user. The state directory stays the
+# image's octopushy-agent user's, so `--user 10001` still works on a fresh volume (with one
+# attempt at a time); as root the agent takes it over at start.
+USER root
+# No tool user may write to /tmp and the like: each attempt's temporary files go in its workspace.
+# /dev/shm, a mount of the runtime's, stays shared and sticky. The agent does this again at start,
+# for a volume or a tmpfs mounted over them.
+RUN chmod 0755 /tmp /var/tmp && if [ -d /run/lock ]; then chmod 0755 /run/lock; fi
 ENV STATE_DIRECTORY=/var/lib/octopushy-agent \
     HOME=/var/lib/octopushy-agent \
     OCTOPUSHY_LOG=info

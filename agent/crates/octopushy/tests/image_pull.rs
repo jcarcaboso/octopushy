@@ -103,6 +103,7 @@ impl Fake {
                 cancel,
                 mutating: true,
                 snapshots: Default::default(),
+                tool_user: None,
             },
         }
     }

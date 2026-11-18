@@ -822,7 +822,7 @@ async fn relay(
     let code = match tokio::time::timeout(Duration::from_secs(3), child.wait()).await {
         Ok(Ok(status)) => status.code(),
         _ => {
-            runtime.kill_group(&name, pgid).await;
+            runtime.kill_group(&name, pgid, None).await;
             let _ = child.wait().await;
             None
         }

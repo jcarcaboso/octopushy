@@ -88,6 +88,7 @@ async fn exec_marked(
         cancel,
         mutating: true,
         snapshots: Default::default(),
+        tool_user: None,
     };
     let result = executors::run(&cfg, "proxmox", &ctx).await;
     let lines = buffer

@@ -22,7 +22,7 @@ use crate::images::ServerLink;
 use crate::outbox::Outbox;
 use crate::paths::StatePaths;
 use crate::reachability::{self, Prober};
-use crate::tools::{RuntimeKind, ToolRuntime};
+use crate::tools::{RuntimeKind, ToolRuntime, users};
 
 /// Options of `octopushy agent run`.
 #[derive(Debug, Clone)]
@@ -86,7 +86,33 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
 
     let outbox = Outbox::open(paths.outbox())?;
 
-    let runtime = tool_runtime(&opts, Some(id.record.agent_id.clone()));
+    let runtime = tool_runtime(&opts, Some(id.record.agent_id.clone()))?;
+    log_isolation(&runtime);
+    if let Some(pool) = runtime.users.clone() {
+        // Whatever the agent writes from now on is its own alone.
+        // SAFETY: umask has no preconditions.
+        unsafe { libc::umask(0o077) };
+        pool.keep_out_of_sweeps([
+            paths.root.clone(),
+            work_dir.clone(),
+            opts.nix_store_dir.clone(),
+        ]);
+        let nix_cache = paths.root.join("cache").join("nix");
+        users::secure_state(
+            &paths.root,
+            &work_dir,
+            pool.nix_user().map(|u| (nix_cache.as_path(), u)),
+        )
+        .context("making the state directory the agent's alone")?;
+        // A tool a killed agent left running is stopped before its attempt is reported.
+        // No tool user can write to /tmp and the like; /dev/shm stays shared, and sticky.
+        pool.lock_down()
+            .context("locking down the folders tool users could write to")?;
+        // A user that cannot be cleaned up is quarantined; with none left the agent does not start.
+        tokio::task::spawn_blocking(move || pool.clean_all())
+            .await?
+            .context("cleaning up after a previous agent process")?;
+    }
     let probed = availability::probe(&runtime, &opts.nix_store_dir, opts.nix_min_free_bytes).await;
     log_changes(None, &probed);
     // Probes need no tool: an agent-process probe is the executor's own connection, and a tool
@@ -204,8 +230,32 @@ fn log_changes(before: Option<&Availability>, after: &Availability) {
     }
 }
 
-/// The tool runtime `opts` set up. `owner` labels its containers.
-fn tool_runtime(opts: &RunOptions, owner: Option<String>) -> ToolRuntime {
+/// Says how tools are kept apart, once, at start.
+fn log_isolation(runtime: &ToolRuntime) {
+    if runtime.is_container() {
+        return;
+    }
+    match &runtime.users {
+        Some(pool) => tracing::info!(
+            "tool runtime local, isolated: each attempt runs its tools as a user of its own \
+             ({} users; Nix builds as {}, one at a time)",
+            pool.size(),
+            pool.nix_user()
+                .map(|u| users::name_of(u.uid))
+                .unwrap_or_else(|| "nobody, as the store is root's: not offered".into())
+        ),
+        None => tracing::warn!(
+            "tool runtime local, shared: tools run as the agent's own user ({}), one attempt at a \
+             time; run the agent as root (the agent image does) to give each attempt a user of its own",
+            // SAFETY: no preconditions.
+            users::name_of(unsafe { libc::geteuid() })
+        ),
+    }
+}
+
+/// The tool runtime `opts` set up. `owner` labels its containers. With the `local` runtime as
+/// root, tools run as the pool's users; it fails when there is none, rather than run them as root.
+fn tool_runtime(opts: &RunOptions, owner: Option<String>) -> Result<ToolRuntime> {
     let mut runtime = ToolRuntime::new(
         opts.tool_runtime,
         opts.container_binary.clone(),
@@ -218,7 +268,10 @@ fn tool_runtime(opts: &RunOptions, owner: Option<String>) -> ToolRuntime {
     runtime.pids_limit = opts.container_pids_limit;
     runtime.memory_limit = opts.container_memory.clone();
     runtime.require_image_digest = opts.require_image_digest;
-    runtime
+    if opts.tool_runtime == RuntimeKind::Local && users::is_root() {
+        runtime.users = Some(Arc::new(users::UserPool::discover(&opts.nix_store_dir)?));
+    }
+    Ok(runtime)
 }
 
 fn storage_dirs(opts: &RunOptions, state: &Path, work: &Path, providers: &Path) -> StorageDirs {
@@ -240,7 +293,13 @@ pub async fn doctor(opts: RunOptions) -> bool {
         .work_dir
         .clone()
         .unwrap_or_else(|| paths.default_work_dir());
-    let runtime = tool_runtime(&opts, None);
+    let runtime = match tool_runtime(&opts, None) {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            eprintln!("{e:#}");
+            return false;
+        }
+    };
     let probed = availability::probe(&runtime, &opts.nix_store_dir, opts.nix_min_free_bytes).await;
     let dirs = storage_dirs(&opts, &paths.root, &work, &paths.provider_cache());
     tokio::task::spawn_blocking(move || {

@@ -30,6 +30,10 @@ podman compose up -d                      # or: docker compose up -d
 - `COMPOSE_PROFILES=agent` in `.env` adds an internal agent (image `just images` builds
   too). Enroll it once with a token from the web interface:
   `OCTOPUSHY_ENROLLMENT_TOKEN='opy1.…' podman compose run --rm --no-deps -e OCTOPUSHY_ENROLLMENT_TOKEN agent agent enroll --server https://backend:8443 --name internal`.
+  The agent starts as root and runs each attempt's tools as an unprivileged user of its own;
+  `compose.yaml` gives it only the capabilities that takes (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`,
+  `KILL`, `SETUID`, `SETGID`) and `no-new-privileges`. See
+  [the safety boundary](../docs/safety-boundary.md#tools-apart-from-the-agent-and-from-each-other).
 - The web interface listens on `127.0.0.1:8081` by default. Put TLS in front of it
   before exposing it to the network (`OCTOPUSHY_UI_BIND`).
 - Agents connect to port 8443 on `OCTOPUSHY_AGENT_HOST`. That name goes into the agent

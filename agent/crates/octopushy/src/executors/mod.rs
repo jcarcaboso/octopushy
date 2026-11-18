@@ -132,6 +132,8 @@ pub struct ExecContext {
     pub mutating: bool,
     /// Where a running apply leaves its state for the connection to send.
     pub snapshots: opentofu::state::Snapshots,
+    /// The user the attempt's tools run as, when each attempt has its own; see `tools::users`.
+    pub tool_user: Option<tools::users::ToolUser>,
 }
 
 impl ExecContext {
