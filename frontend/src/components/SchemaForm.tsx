@@ -7,7 +7,6 @@ import {
   initialValue,
   isObject,
   kindOf,
-  matchesPattern,
   propertyOrder,
   requiredOf,
   resolve,
@@ -137,6 +136,8 @@ function constraints(schema: Schema): string | null {
   else if (typeof schema.minimum === "number") parts.push(`at least ${schema.minimum}`);
   else if (typeof schema.maximum === "number") parts.push(`at most ${schema.maximum}`);
   if (typeof schema.format === "string") parts.push(schema.format);
+  // Shown, never executed: a repository-supplied pattern compiled into a RegExp could hang the tab (ReDoS).
+  if (typeof schema.pattern === "string") parts.push(`expected format: ${schema.pattern}`);
   return parts.length ? parts.join(", ") : null;
 }
 
@@ -205,20 +206,17 @@ function RemoveButton({ onClick, name }: { onClick: () => void; name: string }) 
 function StringField(props: ResolvedProps) {
   const { disabled } = useForm();
   const id = useId();
-  const [touched, setTouched] = useState(false);
   const text = typeof props.value === "string" ? props.value : props.value === undefined || props.value === null ? "" : String(props.value);
-  const matches = touched && text !== "" ? matchesPattern(props.schema.pattern, text) : null;
-  const invalid = props.issues.length > 0 || matches === false;
   const input =
     props.hints.widget === "textarea" ? (
-      <textarea id={id} rows={4} value={text} disabled={disabled} aria-invalid={invalid}
-        onChange={(e) => props.onChange(e.target.value === "" && !props.item ? undefined : e.target.value)} onBlur={() => setTouched(true)} />
+      <textarea id={id} rows={4} value={text} disabled={disabled} aria-invalid={props.issues.length > 0}
+        onChange={(e) => props.onChange(e.target.value === "" && !props.item ? undefined : e.target.value)} />
     ) : (
-      <input id={id} type="text" value={text} disabled={disabled} aria-invalid={invalid}
-        onChange={(e) => props.onChange(e.target.value === "" && !props.item ? undefined : e.target.value)} onBlur={() => setTouched(true)} />
+      <input id={id} type="text" value={text} disabled={disabled} aria-invalid={props.issues.length > 0}
+        onChange={(e) => props.onChange(e.target.value === "" && !props.item ? undefined : e.target.value)} />
     );
   return (
-    <Shell props={props} htmlFor={id} extra={matches === false ? "This does not match the pattern the workflow expects." : null}>
+    <Shell props={props} htmlFor={id}>
       {input}
     </Shell>
   );

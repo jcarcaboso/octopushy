@@ -70,6 +70,33 @@ public class HeartbeatTests(PostgresFixture postgres) : IClassFixture<PostgresFi
     }
 
     [Fact]
+    public async Task A_heartbeat_with_ids_that_are_not_Guids_renews_the_valid_ones_without_throwing()
+    {
+        var clock = new TestClock { Now = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()) };
+        await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false, clock: clock);
+        var agent = Guid.NewGuid();
+        var oldLease = clock.GetUtcNow().AddSeconds(-1);
+        var attempt = new Attempt
+        {
+            Id = Guid.NewGuid(), Executor = "proxmox", Action = "observe", AgentId = agent,
+            Status = AttemptStatuses.Running, LeaseExpiresAt = oldLease, CreatedAt = clock.GetUtcNow(),
+        };
+        await server.WithDbAsync(async db =>
+        {
+            db.Agents.Add(new AgentRecord { Id = agent, Name = "heartbeat", CertificateSerial = "heartbeat" });
+            db.Attempts.Add(attempt);
+            await db.SaveChangesAsync();
+        });
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        // One malformed id alongside a valid one: the malformed id is skipped, the valid one is still renewed.
+        var ids = new[] { "not-a-guid", attempt.Id.ToString(), "also not a guid" };
+        await server.Engine.OnHeartbeatAsync(agent, ids, timeout.Token);
+        var saved = await server.QueryAsync(db => db.Attempts.AsNoTracking().SingleAsync(a => a.Id == attempt.Id));
+        Assert.Equal(clock.GetUtcNow().AddSeconds(60), saved.LeaseExpiresAt);
+        Assert.Equal(clock.GetUtcNow(), await server.QueryAsync(db => db.Agents.Where(a => a.Id == agent).Select(a => a.LastSeenAt).SingleAsync()));
+    }
+
+    [Fact]
     public async Task A_heartbeat_and_log_batches_on_the_stream_do_not_wait_for_the_engine_lock()
     {
         await using var server = await ServerHarness.StartAsync(postgres, withSecrets: false);

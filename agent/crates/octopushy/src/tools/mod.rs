@@ -239,8 +239,15 @@ impl ToolRuntime {
         }
     }
 
-    /// Refuses an image not named by digest when [`ToolRuntime::require_image_digest`] is on.
+    /// Refuses an image reference a container runtime would read as an option, and one not
+    /// named by digest when [`ToolRuntime::require_image_digest`] is on.
     pub fn check_image(&self, image: &str) -> Result<()> {
+        if image.starts_with('-') {
+            bail!(
+                "the image {image} is not a valid reference: it starts with '-', which \
+                 the container runtime would read as an option"
+            );
+        }
         if self.require_image_digest && !is_pinned(image) {
             bail!(
                 "the image {image} is not pinned by digest, and this agent requires one \
@@ -634,6 +641,9 @@ impl ToolRuntime {
                     cmd.args(["-e", k]);
                 }
                 cmd.envs(by_name.iter().map(|(k, v)| (k, v)));
+                // The image follows the option terminator, so even a "-"-prefixed
+                // reference (check_image refuses one) could not read as an option.
+                cmd.arg("--");
                 cmd.arg(inv.image);
                 // The image's entrypoint is the tool.
                 cmd.args(&inv.args);
@@ -1234,7 +1244,7 @@ mod tests {
         assert!(joined.contains("--network octonet"));
         assert!(!joined.contains("--privileged"));
         assert!(
-            joined.ends_with("ghcr.io/opentofu/opentofu:1.13.1 init -input=false"),
+            joined.ends_with("-- ghcr.io/opentofu/opentofu:1.13.1 init -input=false"),
             "{joined}"
         );
         let env: Vec<_> = cmd.as_std().get_envs().collect();
@@ -1343,6 +1353,43 @@ mod tests {
         inv.user = None;
         let err = rt.command(&inv).await.unwrap_err().to_string();
         assert!(err.contains("no user of its own"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn the_image_follows_the_option_terminator_and_one_starting_with_a_dash_is_refused() {
+        let ws = PathBuf::from("/srv/work/att-1");
+        let workdir = ws.join("repo/root");
+        let cache = PathBuf::from("/srv/cache");
+        let rt = ToolRuntime::new(RuntimeKind::Podman, None, "tofu".into(), None);
+        let inv = tofu_invocation(&ws, &workdir, &cache);
+        let (cmd, _) = rt.command(&inv).await.unwrap();
+        let args: Vec<_> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let image = args
+            .iter()
+            .position(|a| a == inv.image)
+            .expect("the image is an argument");
+        assert_eq!(args[image - 1], "--", "the image follows the terminator");
+        assert_eq!(args[image + 1], "init", "the tool's arguments follow it");
+
+        let mut inv = tofu_invocation(&ws, &workdir, &cache);
+        inv.image = "--privileged";
+        let err = rt.command(&inv).await.unwrap_err().to_string();
+        assert!(err.contains("not a valid reference"), "{err}");
+        assert!(err.contains("starts with '-'"), "{err}");
+        assert!(rt.check_image("--privileged").is_err());
+        // Even digest pinning does not make an option-like name acceptable.
+        let mut rt = ToolRuntime::new(RuntimeKind::Podman, None, "tofu".into(), None);
+        rt.require_image_digest = true;
+        let pinned = format!("--privileged@sha256:{}", "a".repeat(64));
+        inv.image = &pinned;
+        assert!(
+            rt.command(&inv).await.is_err(),
+            "a digest does not rescue a name the runtime would read as an option"
+        );
     }
 
     #[tokio::test]

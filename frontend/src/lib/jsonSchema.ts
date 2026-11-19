@@ -3,7 +3,9 @@
  *
  * Rendered as fields: objects with `properties`, arrays whose `items` is one schema, `string`, `integer`, `number`,
  * `boolean`, `enum`, `const`, local `$ref` into `$defs`/`definitions`, `title`, `description`, `required`, `default`,
- * `minimum`/`maximum`, and `pattern`/`format` as hints. Keywords that only constrain values, such as `if`/`then`/`else`,
+ * `minimum`/`maximum`, and `pattern`/`format` as hint text. A schema comes from the repository, so its `pattern` is
+ * never compiled into a RegExp here: it is only shown, and the server, which validates every change, is the gate.
+ * Keywords that only constrain values, such as `if`/`then`/`else`,
  * `allOf`, `not`, `dependentSchemas`, `dependentRequired`, `contains` and `uniqueItems`, are left to the server, which
  * validates every change. Anything else, such as `oneOf`, `anyOf`, a type list, `patternProperties`, or an object with no
  * `properties`, is edited as YAML for that part of the value, so nothing is ever dropped.
@@ -191,14 +193,4 @@ export function withKey(value: JsonObject | undefined, key: string, next: JsonVa
   if (next === undefined) delete copy[key];
   else copy[key] = next;
   return copy;
-}
-
-/** A pattern as a hint: whether the text matches it, or null when the browser cannot read the pattern. */
-export function matchesPattern(pattern: unknown, text: string): boolean | null {
-  if (typeof pattern !== "string") return null;
-  try {
-    return new RegExp(pattern, "u").test(text);
-  } catch {
-    return null;
-  }
 }

@@ -340,7 +340,8 @@ export function readDefinition(text: string, kind: DefinitionKind): DefinitionSe
         const items = itemNodes(node);
         value.forEach((url, index) => {
           const item = items[index];
-          general.push({ key: `links[${index}]`, label: "Link", value: { kind: "link", url: plain(url) }, line: item?.line ?? node.line, note: joinNotes(index === 0 ? note : null, item?.comment) });
+          // Only http(s) opens in the browser, as in scalarValue: anything else — tcp://, javascript: — is text.
+          general.push({ key: `links[${index}]`, label: "Link", value: scalarValue(url), line: item?.line ?? node.line, note: joinNotes(index === 0 ? note : null, item?.comment) });
         });
       } else {
         general.push(...fieldsOf(value, node, { section: "general", kind, path: [key], key, label: label(key), line: node.line, note }));
