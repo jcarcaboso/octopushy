@@ -281,7 +281,7 @@ it("tries again on the bell's next poll when fetching the new failed", async () 
   expect(await within(screen.getByRole("region", { name: "Today" })).findByRole("link", { name: /home\/pve01\/web\/app is down/ })).toBeVisible();
 });
 
-it("tries a filter's failed refresh again on the next poll, even when another filter answered meanwhile", async () => {
+it("catches a filter up after its refresh failed while another filter was shown", async () => {
   const user = userEvent.setup();
   let latest = month;
   let failing = false;
