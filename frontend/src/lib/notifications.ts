@@ -63,8 +63,9 @@ function subscribe(listener: () => void) {
   };
 }
 
-/** Marks everything up to `id` read. */
+/** Marks everything up to `id` read. Never moves back: a bell or a tab that knows less leaves it as it is. */
 export function markSeen(id: number) {
+  if (id <= readSeen()) return;
   localStorage.setItem(SEEN_KEY, String(id));
   listeners.forEach((listener) => listener());
 }

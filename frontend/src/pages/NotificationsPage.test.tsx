@@ -194,7 +194,7 @@ it("marks all read, and the bell's count goes at once", async () => {
   expect(screen.queryByText("(unread)")).not.toBeInTheDocument();
 });
 
-it("puts what the bell's poll brings on top, fetching only what came after the newest listed", async () => {
+it("puts what the bell's poll brings on top, fetching the loaded pages again", async () => {
   let latest = month;
   const above = (r: RecordedRequest) => Number(new URLSearchParams(r.search).get("after") ?? 0);
   const { requests } = show({ "GET /api/notifications": bellOr(() => page(latest), (r) => page(latest.filter((item) => item.id > above(r)))) });
@@ -206,5 +206,5 @@ it("puts what the bell's poll brings on top, fetching only what came after the n
   await act(() => client.refetchQueries({ queryKey: keys.notifications, exact: true }));
   expect(await screen.findByRole("link", { name: /home\/pve01\/web\/app is down/ })).toBeVisible();
   const after = inboxRequests(requests).slice(asked);
-  expect(after.map((query) => query.toString())).toEqual(["limit=200&after=20"]);
+  expect(after.map((query) => query.toString())).toEqual(["limit=100"]);
 });

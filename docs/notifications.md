@@ -48,8 +48,8 @@ The page asks for notifications every ten seconds.
   pointer or the focus leaves. Clicking it opens the run or the resource.
 - **The Notifications page**, at `/notifications`, lists every notification kept, the last 31 days, newest first and
   grouped by day. The bell's panel links to it. Filters keep runs, uptime or agents, only the unread, or those whose
-  title or text holds what you type. A check that goes down twice or more in a row, with no up between, is folded into
-  one line. **Mark all read** marks everything read in this browser. **Load older** fetches the next page.
+  title or text holds what you type. Notifications in a row about one check, two downs or more among them, are folded
+  into one line. **Mark all read** marks everything read in this browser. **Load older** fetches the next page.
 - Nothing pops up for what was already there when the page loaded, or for what happened while the tab was away for more
   than a minute. The count on the bell covers those.
 

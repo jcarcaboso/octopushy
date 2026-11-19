@@ -1,5 +1,5 @@
-import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { api, unwrap } from "./client";
 import type {
   AgentUpdate,
@@ -10,7 +10,6 @@ import type {
   DraftDetail,
   DraftFileChange,
   DraftPublishRequest,
-  NotificationList,
   RepositoryUpdate,
   ConfirmWorkflowSource,
   RunDetail,
@@ -115,11 +114,9 @@ const INBOX_PAGE = 100;
 
 /**
  * All notifications the server keeps, a page at a time, filtered on the server. It does not poll: when the bell's poll
- * brings a newer one (`latest`), only what came after the newest listed is fetched and put on top, so the pages already
- * loaded are not fetched again. Pass the same `filter` object for as long as it does not change.
+ * brings a newer one (`latest`) than the newest listed, the pages loaded are fetched again, in order, by React Query.
  */
 export function useNotificationInbox(filter: NotificationFilter, latest: number) {
-  const client = useQueryClient();
   const query = useInfiniteQuery({
     queryKey: keys.notificationInbox(filter),
     queryFn: ({ pageParam }) =>
@@ -143,38 +140,11 @@ export function useNotificationInbox(filter: NotificationFilter, latest: number)
     refetchOnWindowFocus: false,
   });
 
-  const top = query.data?.pages[0]?.items[0]?.id ?? filter.after ?? 0;
-  const ready = query.isSuccess && !query.isPlaceholderData;
-  const tried = useRef(0);
+  const top = query.data?.pages[0]?.items[0]?.id ?? 0;
+  const { isSuccess, refetch } = query;
   useEffect(() => {
-    if (!ready || latest <= top || latest <= tried.current) return;
-    tried.current = latest;
-    const queryKey = keys.notificationInbox(filter);
-    void (async () => {
-      const fresh = await unwrap(
-        api.GET("/api/notifications", {
-          params: {
-            query: {
-              limit: 200,
-              after: Math.max(top, filter.after ?? 0),
-              kind: filter.kinds.length > 0 ? [...filter.kinds] : undefined,
-              q: filter.q || undefined,
-            },
-          },
-        }),
-      ).catch(() => null);
-      if (!fresh || fresh.items.length === 0) return;
-      // More than one page arrived at once: start over rather than leave a gap.
-      if (fresh.nextBefore !== null) return void client.resetQueries({ queryKey });
-      client.setQueryData<InfiniteData<NotificationList, number | null>>(queryKey, (data) => {
-        if (!data) return data;
-        const [first, ...rest] = data.pages;
-        const known = first.items[0]?.id ?? 0;
-        const items = fresh.items.filter((item) => item.id > known);
-        return { ...data, pages: [{ ...first, items: [...items, ...first.items] }, ...rest] };
-      });
-    })();
-  }, [ready, latest, top, filter, client]);
+    if (isSuccess && latest > top) void refetch();
+  }, [isSuccess, latest, top, refetch]);
 
   return query;
 }
