@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.10.0:
+Milestone 1 has shipped, up to release 0.10.1:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,21 @@ Milestone 1 has shipped, up to release 0.10.0:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.10.1:
+
+- The Notifications page, at `/notifications`, from #197: it lists every notification kept — they are deleted after 31
+  days — newest first and grouped by day, with filters that keep runs, uptime or agents, only the unread, or those whose
+  title or text holds what you type, and a check that goes down twice or more among them folded into one line. **Mark
+  all read** marks everything read in this browser, and **Load older** fetches the next page. The bell links to it and
+  shares its read state, and the webhook settings move to `/notifications/webhook`, which the page links to.
+- `GET /api/notifications` grows, compatibly, from #197: `limit` sets how many a page holds, from 1 to 200 (fifty by
+  default), `before` and `after` bound the ids, `kind`, repeated for more than one, keeps those kinds, and `q` keeps
+  those whose title or body holds the text. The answer's `nextBefore` is the `before` for the next page, or null on the
+  last, and each item also carries its run's number, its resource's address and its agent's name, each null once that
+  row is gone.
+
+No migration and no agent contract change: stop the old backend before starting the new one; agents need no update.
 
 New in 0.10.0:
 
