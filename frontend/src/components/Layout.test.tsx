@@ -25,4 +25,15 @@ describe("shell", () => {
     await user.click(screen.getByRole("button", { name: "Sign out" }));
     await waitFor(() => expect(requests.map((request) => `${request.method} ${request.path}`)).toContain("POST /api/auth/logout"));
   });
+
+  it("lights Notifications on the inbox and on the webhook page under it", async () => {
+    mockApi({
+      "GET /api/auth/state": () => ({ setupRequired: false, authenticated: true, username: "ops" }),
+      "GET /api/repository": () => ({ url: "https://git.example.org/lab.git", lastFetchError: null }),
+      "GET /api/notifications": () => ({ items: [], nextBefore: null }),
+    });
+    renderAt(<Layout />, { path: "/notifications/*", route: "/notifications/webhook" });
+    expect(await screen.findByRole("link", { name: "Notifications" })).toHaveClass("nav__link--active");
+    expect(screen.getByRole("link", { name: "Notifications" })).toHaveAttribute("href", "/notifications");
+  });
 });

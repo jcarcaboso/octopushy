@@ -1,10 +1,11 @@
-import { Bell, X } from "lucide-react";
+import { Bell, ChevronRight, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router";
 import { useNotifications } from "../api/queries";
 import type { NotificationItem } from "../api/types";
-import { plural, runResourcePath } from "../lib/format";
+import { plural } from "../lib/format";
+import { markSeen, marks, pathOf, useSeen } from "../lib/notifications";
 import { StatusMark } from "./Badge";
 import { RelativeTime } from "./RelativeTime";
 
@@ -13,27 +14,6 @@ const MAX_TOASTS = 3;
 const TOAST_MS = 8_000;
 /** Polls are ten seconds apart. A longer gap means the tab was away, and what happened meanwhile is not news any more. */
 const AWAY_MS = 60_000;
-// ponytail: what was read is kept per browser; move it to the user's row if the count should follow them across devices.
-const SEEN_KEY = "octopushy.notifications.seen";
-
-/** Each kind borrows the mark of the status it reads as; a kind this build does not know gets the plain dot. */
-const marks: Record<string, string> = {
-  "check-down": "failed",
-  "check-up": "succeeded",
-  "run-approval": "awaiting-approval",
-  "run-failed": "failed",
-  "run-uncertain": "uncertain",
-  "agent-offline": "failed",
-  "agent-online": "succeeded",
-  "agent-update-failed": "failed",
-};
-
-function pathOf(item: NotificationItem): string | null {
-  if (item.runId) return `/runs/${item.runId}`;
-  if (item.resourceId && item.resourceKind) return runResourcePath({ resourceKind: item.resourceKind, resourceId: item.resourceId });
-  if (item.agentId) return "/agents";
-  return null;
-}
 
 /** One notification as a line that leads to its run or resource, when it still has one. */
 function Notice({ item, time = false, unread = false, onFollow }: { item: NotificationItem; time?: boolean; unread?: boolean; onFollow: () => void }) {
@@ -95,7 +75,7 @@ export function Notifications() {
   const items = data?.items ?? [];
   const latest = items[0]?.id ?? 0;
   const [open, setOpen] = useState(false);
-  const [seen, setSeen] = useState(() => Number(localStorage.getItem(SEEN_KEY)) || 0);
+  const seen = useSeen();
   const [toasts, setToasts] = useState(noToasts);
   // The pop-ups wait while the pointer is on them or the focus is in them, whichever came first and whichever is left.
   const [hovered, setHovered] = useState(false);
@@ -130,8 +110,7 @@ export function Notifications() {
   // Closing is what marks them read, so the unread ones stay marked while the list is open.
   const close = useCallback(() => {
     setOpen(false);
-    setSeen(latest);
-    localStorage.setItem(SEEN_KEY, String(latest));
+    markSeen(latest);
   }, [latest]);
 
   useEffect(() => {
@@ -185,6 +164,10 @@ export function Notifications() {
             ))}
           </ul>
         )}
+        <Link to="/notifications" className="notifications__all" onClick={close}>
+          All notifications
+          <ChevronRight size={14} aria-hidden="true" />
+        </Link>
       </section>
       {createPortal(
         <section

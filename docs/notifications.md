@@ -1,8 +1,8 @@
 # Notifications
 
 Octopushy tells you when something it watches goes wrong, when it recovers, and when a run waits for you. The bell at
-the top of the sidebar lists the latest fifty notifications. One that arrives while the page is open also pops up at the
-top right. A [webhook](#the-webhook) can also post them to one URL, so you find out without opening the app.
+the top of the sidebar lists the latest fifty notifications, and the Notifications page lists all that are kept. One that
+arrives while the page is open also pops up at the top right. A [webhook](#the-webhook) can also post them to one URL, so you find out without opening the app.
 
 The bell needs no setup.
 
@@ -46,6 +46,10 @@ The page asks for notifications every ten seconds.
   opens the list. A pop-up goes after eight seconds, waits while the pointer or the keyboard focus is on it, and has a
   button to dismiss it. A bar along its bottom edge shows the time it has left; the eight seconds start again when the
   pointer or the focus leaves. Clicking it opens the run or the resource.
+- **The Notifications page**, at `/notifications`, lists every notification kept, the last 31 days, newest first and
+  grouped by day. The bell's panel links to it. Filters keep runs, uptime or agents, only the unread, or those whose
+  title or text holds what you type. A check that goes down twice or more in a row, with no up between, is folded into
+  one line. **Mark all read** marks everything read in this browser. **Load older** fetches the next page.
 - Nothing pops up for what was already there when the page loaded, or for what happened while the tab was away for more
   than a minute. The count on the bell covers those.
 
@@ -57,13 +61,18 @@ save interceptor, so it covers every place that fails a run and writes no run it
 by the code that saves its state: the presence check, which writes only the agent's `offline_notified_at`, and the
 update that fails.
 
-`GET /api/notifications` returns the latest fifty, newest first. Rows are never changed, and they are deleted after 31
+`GET /api/notifications` returns a page of notifications, newest first: with no parameters, the latest fifty. `limit`
+sets how many, from 1 to 200. `before` and `after` keep ids below or above one. `kind`, repeated for more than one, keeps
+those kinds. `q` keeps those whose title or body holds the text, ignoring case; `%` and `_` in it match only
+themselves. Anything out of these bounds, or an unknown kind, is a 400. The answer's `nextBefore` is the `before` for the
+next page, or null on the last. Each item also carries its run's number, its resource's address and its agent's name,
+each null once that row is gone. Rows are never changed, and they are deleted after 31
 days, like uptime answers. A row points at its run, resource or agent by id without a foreign key, so a notification can
 never make a run's save fail. Its link is dropped once the resource is gone.
 
 ## The webhook
 
-Set it on the Notifications page, under Configure: a URL, and the kinds to send. By default those are `run-approval`,
+Set it at `/notifications/webhook`, which the Notifications page links to: a URL, and the kinds to send. By default those are `run-approval`,
 `run-failed`, `run-uncertain`, `agent-offline`, `agent-online` and `agent-update-failed`. The uptime kinds are left
 out, because a check that flaps would post every minute; tick them to have them too. **Send a test event** posts a
 `test` event to the URL at once, past the queue, and says what the receiver answered. It may be pressed six times a
@@ -140,7 +149,7 @@ It runs only in the server process that owns the database, never in `migrate`. I
 sends from inside a save. A save that adds a notification wakes it. Otherwise it looks once a minute.
 
 - A 2xx answer is a delivery. No redirect is followed, so a 3xx is a failure.
-- A 410 Gone stops sending. The Notifications page says so until the URL is saved again, and sending starts from then.
+- A 410 Gone stops sending. The webhook page says so until the URL is saved again, and sending starts from then.
 - Anything else, a timeout of five seconds included, is tried again after 10 seconds, doubling each time to at most 10
   minutes. Later events wait behind it.
 - An event is given up once it is 24 hours old, or after five answers that refuse it: a 4xx other than 408, 410 and
@@ -149,7 +158,7 @@ sends from inside a save. A save that adds a notification wakes it. Otherwise it
   that refuses a single event lets the next through within a few minutes.
 - When more than 50 events wait, the oldest are given up, so a receiver that comes back after a day gets at most 50, one
   after another.
-- Given-up events are counted on the Notifications page.
+- Given-up events are counted on the webhook page.
 
 The receiver's answer is never read: a receiver, or a proxy before it, may echo the path and query it was asked for, token
 and all. What a try came to is its status code and one of these, written by the server:

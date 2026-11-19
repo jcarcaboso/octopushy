@@ -1,231 +1,318 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { Save, Send, Trash2 } from "lucide-react";
-import { useState, type FormEvent } from "react";
-import { api, unwrap } from "../api/client";
-import { keys, useDeleteWebhook, useTestWebhook, useWebhook } from "../api/queries";
-import type { Webhook } from "../api/types";
-import { Badge } from "../components/Badge";
-import { Callout } from "../components/Callout";
-import { Card } from "../components/Card";
-import { ConfirmDialog } from "../components/ConfirmDialog";
+import { Activity, Bell, CheckCheck, ChevronDown, ChevronRight, Search, Webhook } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router";
+import { useNotificationInbox, useNotifications } from "../api/queries";
+import type { NotificationItem } from "../api/types";
+import { StatusMark } from "../components/Badge";
 import { PageHeader } from "../components/PageHeader";
-import { RelativeTime } from "../components/RelativeTime";
-import { ErrorMessage, PageSkeleton } from "../components/States";
+import { EmptyState, ErrorMessage, PageSkeleton, Spinner } from "../components/States";
+import { plural } from "../lib/format";
+import { byDay, clockTime, foldChecks, kindGroups, markSeen, marks, pathOf, targetLabel, useSeen, type KindGroup } from "../lib/notifications";
+import { formatAbsolute } from "../lib/time";
 
-/** What each kind of notification is, as the operator chooses what the webhook sends. */
-const kindLabels: Record<string, string> = {
-  "run-approval": "A run waits for approval",
-  "run-failed": "A run failed",
-  "run-uncertain": "A run's outcome is uncertain",
-  "agent-offline": "An agent is offline",
-  "agent-online": "An agent told offline is back",
-  "agent-update-failed": "An agent's update failed",
-  "check-down": "An uptime check went down",
-  "check-up": "An uptime check came back up",
-};
+const groups: { value: KindGroup | null; label: string }[] = [
+  { value: null, label: "All" },
+  { value: "runs", label: "Runs" },
+  { value: "uptime", label: "Uptime" },
+  { value: "agents", label: "Agents" },
+];
 
-function Status({ webhook }: { webhook: Webhook }) {
-  if (!webhook.configured) return <Badge tone="neutral">Not set</Badge>;
-  if (!webhook.enabled) return <Badge tone="danger">Stopped</Badge>;
-  return <Badge tone="success">Sending</Badge>;
-}
+const noKinds: readonly string[] = [];
+/** Typing waits this long before the server is asked. */
+const SEARCH_MS = 300;
 
-/** How the last attempt went, the time of the last delivery and what was given up. */
-function LastDelivery({ webhook }: { webhook: Webhook }) {
-  if (!webhook.lastAttemptAt) return <p className="muted">Nothing has been sent yet.</p>;
+function Time({ value }: { value: string }) {
   return (
-    <dl className="kv">
-      <dt>Last attempt</dt>
-      <dd>
-        <RelativeTime value={webhook.lastAttemptAt} />
-        {" · "}
-        {webhook.lastDelivered ? <Badge tone="success">Delivered</Badge> : <Badge tone="danger">Failed</Badge>}{" "}
-        <span className="mono">{webhook.lastResult}</span>
-      </dd>
-      {webhook.lastDeliveredAt && !webhook.lastDelivered ? (
-        <>
-          <dt>Last delivered</dt>
-          <dd>
-            <RelativeTime value={webhook.lastDeliveredAt} />
-          </dd>
-        </>
-      ) : null}
-      {webhook.nextAttemptAt && webhook.enabled ? (
-        <>
-          <dt>Next try</dt>
-          <dd>
-            <RelativeTime value={webhook.nextAttemptAt} />
-          </dd>
-        </>
-      ) : null}
-      {webhook.dropped > 0 ? (
-        <>
-          <dt>Given up</dt>
-          <dd>{webhook.dropped} events: too old, too many waiting, or refused by the receiver</dd>
-        </>
-      ) : null}
-    </dl>
+    <time className="inbox-row__time" dateTime={value} title={formatAbsolute(value)}>
+      {clockTime(value)}
+    </time>
   );
 }
 
-function WebhookCard({ webhook }: { webhook: Webhook }) {
-  const client = useQueryClient();
-  const [url, setUrl] = useState("");
-  // The kinds ticked here, until saved; the saved ones otherwise.
-  const [draft, setDraft] = useState<string[] | null>(null);
-  const kinds = draft ?? webhook.kinds;
-  const [secret, setSecret] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-  const [removing, setRemoving] = useState(false);
-  const remove = useDeleteWebhook();
-  const test = useTestWebhook();
+function Row({ item, unread }: { item: NotificationItem; unread: boolean }) {
+  const path = pathOf(item);
+  const label = targetLabel(item);
+  // A check that went down says why after its URL.
+  const split = item.kind === "check-down" && item.body ? item.body.indexOf(" · ") : -1;
+  const detail = split >= 0 ? item.body!.slice(split + 3) : null;
+  const where = item.resourceAddress ?? item.agentName;
+  const content = (
+    <>
+      <Time value={item.createdAt} />
+      <StatusMark status={marks[item.kind] ?? item.kind} decorative />
+      <span className="inbox-row__what">
+        <span className="inbox-row__title">{item.title}</span>
+        {unread ? (
+          <span className="inbox-row__dot">
+            <span className="visually-hidden">(unread)</span>
+          </span>
+        ) : null}
+        {detail ? <span className="inbox-row__detail">{detail}</span> : null}
+      </span>
+      <span className="inbox-row__where">
+        {where ? (
+          <span className="chip mono" title={where}>
+            {where}
+          </span>
+        ) : null}
+      </span>
+      {path && label ? (
+        <span className="inbox-row__go">
+          {label}
+          <ChevronRight size={14} aria-hidden="true" />
+        </span>
+      ) : (
+        <span className="inbox-row__go inbox-row__go--none" title="What this was about is gone">
+          Gone
+        </span>
+      )}
+    </>
+  );
+  const className = unread ? "inbox-row inbox-row--unread" : "inbox-row";
+  return path ? (
+    <Link to={path} className={className}>
+      {content}
+    </Link>
+  ) : (
+    <div className={className}>{content}</div>
+  );
+}
 
-  async function save(event: FormEvent) {
-    event.preventDefault();
-    setPending(true);
-    setError(null);
-    try {
-      // The secret is kept in this component only, out of the query and mutation caches.
-      const saved = await unwrap(api.PUT("/api/notifications/webhook", { body: { url: url.trim() || null, kinds } }));
-      client.setQueryData(keys.webhook, saved.webhook);
-      if (saved.secret) setSecret(saved.secret);
-      setUrl("");
-      setDraft(null);
-    } catch (failure) {
-      setError(failure);
-    } finally {
-      setPending(false);
-    }
-  }
-
-  const toggle = (kind: string) => setDraft(kinds.includes(kind) ? kinds.filter((k) => k !== kind) : [...kinds, kind]);
-
+/** A check that went down again and again, as one line that opens in place on its notifications. */
+function Fold({ run, seen }: { run: NotificationItem[]; seen: number }) {
+  const [open, setOpen] = useState(false);
+  const newest = run[0];
+  const oldest = run[run.length - 1];
+  const downs = run.filter((item) => item.kind === "check-down").length;
+  const unread = run.some((item) => item.id > seen);
+  const address = newest.resourceAddress ?? "A check";
+  const id = `fold-${newest.id}`;
   return (
-    <Card title="Webhook" meta={<Status webhook={webhook} />}>
-      <div className="stack">
-        <p>
-          Octopushy posts a small signed JSON event to one URL for each notification of the kinds chosen below. An event names what
-          happened and links to its page. It never carries what a tool printed or a stored value.
-        </p>
-        {webhook.configured ? (
-          <p>
-            Sends to <span className="mono">{webhook.host}</span>. The full URL is kept as a secret and never shown again.
-          </p>
-        ) : null}
-        {webhook.configured && !webhook.enabled ? (
-          <Callout kind="danger" title="The receiver answered 410 Gone">
-            Sending stopped <RelativeTime value={webhook.stoppedAt ?? webhook.lastAttemptAt ?? ""} />. Set the URL again to start
-            sending from now.
-          </Callout>
-        ) : null}
-        {!webhook.linksIncluded ? (
-          <Callout kind="info">
-            Events carry no link to their page: the server's <code>Octopushy:PublicUrl</code> is not set.
-          </Callout>
-        ) : null}
-        {webhook.configured ? <LastDelivery webhook={webhook} /> : null}
-
-        <form className="form" onSubmit={(event) => void save(event)}>
-          <div className="field">
-            <label htmlFor="webhook-url">{webhook.configured ? "New URL" : "URL"}</label>
-            <input
-              id="webhook-url"
-              className="mono"
-              type="url"
-              value={url}
-              maxLength={2000}
-              required={!webhook.configured}
-              onChange={(event) => setUrl(event.target.value)}
-              placeholder={webhook.configured ? "Leave empty to keep the saved URL" : "https://hooks.example.org/octopushy"}
-              autoComplete="off"
-              spellCheck={false}
-              aria-describedby="webhook-url-hint"
-            />
-            <div id="webhook-url-hint" className="field__hint">
-              Write-only. {webhook.httpAllowed ? "https:// or http://" : "https:// only"}, with no user name or password. Saving a
-              URL makes a new signing secret and sends what happens from then on.
-            </div>
-          </div>
-          <fieldset className="field">
-            <legend>Send</legend>
-            <div className="radio-row">
-              {webhook.availableKinds.map((kind) => (
-                <label key={kind} className="checkbox">
-                  <input type="checkbox" checked={kinds.includes(kind)} onChange={() => toggle(kind)} />
-                  <span>
-                    {kindLabels[kind] ?? kind} <span className="muted mono small">{kind}</span>
-                  </span>
-                </label>
-              ))}
-            </div>
-            <div className="field__hint">
-              By default, everything that waits on you or went wrong with an agent. Uptime checks are left out: a check that flaps
-              would post every minute.
-            </div>
-          </fieldset>
-          <ErrorMessage error={error} />
-          <div className="button-row">
-            <button type="submit" className="button button--primary" disabled={pending || kinds.length === 0 || (!webhook.configured && !url.trim())}>
-              <Save size={15} aria-hidden="true" />
-              {pending ? "Saving…" : "Save"}
-            </button>
-            <button type="button" className="button" disabled={!webhook.configured || test.isPending} onClick={() => test.mutate()}>
-              <Send size={15} aria-hidden="true" />
-              {test.isPending ? "Sending…" : "Send a test event"}
-            </button>
-            {webhook.configured ? (
-              <button type="button" className="button button--danger" onClick={() => setRemoving(true)}>
-                <Trash2 size={15} aria-hidden="true" />
-                Remove
-              </button>
-            ) : null}
-          </div>
-        </form>
-
-        {test.data ? (
-          <Callout kind={test.data.delivered ? "success" : "danger"} title={test.data.delivered ? "The test event was delivered" : "The test event was not delivered"}>
-            <span className="mono">{test.data.result}</span>
-          </Callout>
-        ) : null}
-        <ErrorMessage error={test.error} />
-
-        {secret !== null ? (
-          <section className="stack" aria-label="New signing secret">
-            <p>
-              This signing secret is shown only now. The receiver checks each event's <code>X-Octopushy-Signature</code> with it; see
-              docs/notifications.md.
-            </p>
-            <label htmlFor="webhook-secret">Signing secret</label>
-            <textarea id="webhook-secret" className="mono" readOnly value={secret} rows={2} spellCheck={false} autoComplete="off" />
-            <button type="button" className="button" onClick={() => setSecret(null)}>
-              I saved it
-            </button>
-          </section>
-        ) : null}
-      </div>
-      <ConfirmDialog
-        open={removing}
-        title="Remove the webhook"
-        confirmLabel="Remove webhook"
-        danger
-        pending={remove.isPending}
-        error={remove.error}
-        onConfirm={() => remove.mutate(undefined, { onSuccess: () => setRemoving(false) })}
-        onClose={() => setRemoving(false)}
+    <li>
+      <button
+        type="button"
+        className={unread ? "inbox-row inbox-fold inbox-row--unread" : "inbox-row inbox-fold"}
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen(!open)}
       >
-        <p>Its URL and signing secret are deleted, and nothing more is sent. The notifications in the app are not affected.</p>
-      </ConfirmDialog>
-    </Card>
+        <Time value={newest.createdAt} />
+        <Activity className="status-mark status-mark--warning" size={15} strokeWidth={2.25} aria-hidden="true" />
+        <span className="inbox-row__what">
+          <span className="inbox-row__title">
+            {address} went down {downs} times
+          </span>
+          {unread ? (
+            <span className="inbox-row__dot">
+              <span className="visually-hidden">(unread)</span>
+            </span>
+          ) : null}
+          <span className="inbox-row__detail">
+            {clockTime(oldest.createdAt)} to {clockTime(newest.createdAt)}, {newest.kind === "check-up" ? "up now" : "down now"}
+          </span>
+        </span>
+        <span className="inbox-row__where">
+          {newest.resourceAddress ? (
+            <span className="chip mono" title={newest.resourceAddress}>
+              {newest.resourceAddress}
+            </span>
+          ) : null}
+        </span>
+        <span className="inbox-row__go">
+          {run.length}
+          <ChevronDown className="inbox-fold__chevron" size={14} aria-hidden="true" />
+        </span>
+      </button>
+      <ul id={id} className="inbox-fold__rows" hidden={!open}>
+        {run.map((item) => (
+          <li key={item.id}>
+            <Row item={item} unread={item.id > seen} />
+          </li>
+        ))}
+      </ul>
+    </li>
   );
 }
 
+/**
+ * Everything Octopushy told in the 31 days it keeps notifications, newest first under a heading per day. The filters
+ * are the server's, so they cover every day and not only the pages loaded.
+ */
 export function NotificationsPage() {
-  const webhook = useWebhook();
+  const [params, setParams] = useSearchParams();
+  const kindParam = params.get("kind");
+  const group = kindParam && kindParam in kindGroups ? (kindParam as KindGroup) : null;
+  const unreadOnly = params.get("unread") === "1";
+  const q = params.get("q") ?? "";
+  const [text, setText] = useState(q);
+  const seen = useSeen();
+
+  const set = (key: string, value: string | null) =>
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        if (value) next.set(key, value);
+        else next.delete(key);
+        return next;
+      },
+      { replace: true },
+    );
+
+  // What is typed goes to the server once typing stops.
+  useEffect(() => {
+    const wanted = text.trim();
+    if (wanted === q) return;
+    const timer = setTimeout(
+      () =>
+        setParams(
+          (current) => {
+            const next = new URLSearchParams(current);
+            if (wanted) next.set("q", wanted);
+            else next.delete("q");
+            return next;
+          },
+          { replace: true },
+        ),
+      SEARCH_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [text, q, setParams]);
+
+  const filter = useMemo(
+    () => ({ kinds: group ? kindGroups[group] : noKinds, q, after: unreadOnly ? seen : null }),
+    [group, q, unreadOnly, seen],
+  );
+  // The bell's own poll of the latest: it says how many are unread and when something new arrived.
+  const latest = useNotifications().data;
+  const latestId = latest?.items[0]?.id ?? 0;
+  const inbox = useNotificationInbox(filter, latestId);
+  const items = useMemo(() => inbox.data?.pages.flatMap((page) => page.items) ?? [], [inbox.data]);
+  const days = useMemo(() => byDay(items), [items]);
+
+  const latestUnread = latest?.items.filter((item) => item.id > seen).length ?? 0;
+  // The bell's list holds the latest fifty; when all of them are unread there may be more.
+  const more = latest !== undefined && latestUnread === latest.items.length && latest.nextBefore !== null;
+  const newest = Math.max(latestId, items[0]?.id ?? 0);
+  const filtered = Boolean(group || unreadOnly || q);
+
+  const clear = () => {
+    setText("");
+    setParams(new URLSearchParams(), { replace: true });
+  };
+
   return (
-    <div className="stack">
-      <PageHeader title="Notifications" />
-      {webhook.data ? <WebhookCard webhook={webhook.data} /> : webhook.error ? <ErrorMessage error={webhook.error} /> : <PageSkeleton />}
+    <div className="inbox">
+      <PageHeader
+        title="Notifications"
+        meta={latestUnread > 0 ? <strong className="inbox__unread">{more ? `${latestUnread}+` : latestUnread} unread</strong> : null}
+        actions={
+          <>
+            <button type="button" className="button" disabled={newest <= seen} onClick={() => markSeen(newest)}>
+              <CheckCheck size={15} aria-hidden="true" />
+              Mark all read
+            </button>
+            <Link to="/notifications/webhook" className="button button--ghost">
+              <Webhook size={15} aria-hidden="true" />
+              Webhook
+            </Link>
+          </>
+        }
+      />
+
+      <div className="inbox__toolbar">
+        <div className="segmented" role="group" aria-label="Kind">
+          {groups.map((g) => (
+            <button
+              key={g.label}
+              type="button"
+              className="segmented__item"
+              aria-pressed={group === g.value}
+              onClick={() => set("kind", g.value)}
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
+        <label className="inbox__check">
+          <input type="checkbox" checked={unreadOnly} onChange={(event) => set("unread", event.target.checked ? "1" : null)} />
+          Unread only
+        </label>
+        {inbox.isFetching && inbox.isPlaceholderData ? <Spinner label="Loading notifications" /> : null}
+        <label className="inbox__search">
+          <Search size={15} aria-hidden="true" />
+          <input
+            type="search"
+            aria-label="Search notifications"
+            placeholder="Address or agent"
+            value={text}
+            maxLength={200}
+            onChange={(event) => setText(event.target.value)}
+          />
+        </label>
+      </div>
+
+      {inbox.isPending ? (
+        <PageSkeleton rows={2} />
+      ) : !inbox.data ? (
+        <ErrorMessage error={inbox.error} title="The notifications could not be loaded" />
+      ) : items.length === 0 ? (
+        <div className="inbox__list">
+          {filtered ? (
+            <EmptyState
+              compact
+              title="Nothing matches."
+              actions={
+                <button type="button" className="button button--small" onClick={clear}>
+                  Clear filters
+                </button>
+              }
+            >
+              {unreadOnly && !group && !q ? "Everything is read." : null}
+            </EmptyState>
+          ) : (
+            <EmptyState compact icon={Bell} title="No notifications yet">
+              A service that stops answering, a run that fails or one that awaits approval shows up here.
+            </EmptyState>
+          )}
+        </div>
+      ) : (
+        <div className="inbox__days">
+          {days.map((day) => (
+            <section key={day.key} className="inbox__day" aria-labelledby={`day-${day.key}`}>
+              <div className="inbox__day-head">
+                <h2 id={`day-${day.key}`}>{day.label}</h2>
+                <span className="muted small">{plural(day.items.length, "notification")}</span>
+              </div>
+              <ul className="inbox__list">
+                {foldChecks(day.items).map((line) =>
+                  "fold" in line ? (
+                    <Fold key={line.fold[0].id} run={line.fold} seen={seen} />
+                  ) : (
+                    <li key={line.item.id}>
+                      <Row item={line.item} unread={line.item.id > seen} />
+                    </li>
+                  ),
+                )}
+              </ul>
+            </section>
+          ))}
+        </div>
+      )}
+
+      {inbox.data ? (
+        <>
+          <ErrorMessage error={inbox.isFetchNextPageError ? inbox.error : null} title="Older notifications could not be loaded" />
+          {inbox.hasNextPage ? (
+            <div className="inbox__foot">
+              <button type="button" className="button" disabled={inbox.isFetchingNextPage} onClick={() => void inbox.fetchNextPage()}>
+                {inbox.isFetchingNextPage ? "Loading…" : "Load older"}
+              </button>
+            </div>
+          ) : (
+            <p className="inbox__foot muted small">Notifications are kept for 31 days.</p>
+          )}
+        </>
+      ) : null}
     </div>
   );
 }

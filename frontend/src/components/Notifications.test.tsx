@@ -9,7 +9,8 @@ import { mockApi } from "../test/utils";
 import { Notifications } from "./Notifications";
 
 const told = (id: number, title: string, extra: Partial<NotificationItem> = {}): NotificationItem => ({
-  id, kind: "check-down", title, body: null, resourceId: null, resourceKind: null, runId: null, agentId: null, createdAt: "2026-11-16T09:00:00Z", ...extra,
+  id, kind: "check-down", title, body: null, resourceId: null, resourceKind: null, runId: null, agentId: null, createdAt: "2026-11-16T09:00:00Z",
+  runNumber: null, resourceAddress: null, agentName: null, ...extra,
 });
 
 describe("notifications", () => {
@@ -55,6 +56,16 @@ describe("notifications", () => {
     await user.keyboard("{Escape}");
     expect(screen.getByRole("button", { name: "Notifications" })).toHaveFocus();
     expect(localStorage.getItem("octopushy.notifications.seen")).toBe("2");
+  });
+
+  it("leads to the inbox from the foot of its list, and following it closes the list and reads it", async () => {
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Notifications, 2 unread" }));
+    const all = within(screen.getByRole("region", { name: "Notifications" })).getByRole("link", { name: "All notifications" });
+    expect(all).toHaveAttribute("href", "/notifications");
+    await user.click(all);
+    expect(screen.queryByRole("region", { name: "Notifications" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Notifications" })).toBeVisible();
   });
 
   it("pops up what arrives, three at most with the rest as one line, and each goes away by itself or by hand", async () => {
