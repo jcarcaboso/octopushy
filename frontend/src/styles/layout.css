@@ -88,6 +88,21 @@
   padding: 0 var(--space-2) var(--space-3);
 }
 
+/* Held at the foot of the panel while its list scrolls. */
+.notifications__all {
+  position: sticky;
+  bottom: calc(-1 * var(--space-2));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  margin: var(--space-2) calc(-1 * var(--space-2)) calc(-1 * var(--space-2));
+  padding: var(--space-3) var(--space-2);
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: var(--text-sm);
+}
+
 /* One notification: its mark, what happened, and under it where. */
 .notice {
   display: flex;

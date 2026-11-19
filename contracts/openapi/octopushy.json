@@ -2142,6 +2142,49 @@
           "Notifications"
         ],
         "operationId": "listNotifications",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "400": {
             "description": "Bad Request",
@@ -8968,7 +9011,10 @@
           "resourceKind",
           "runId",
           "createdAt",
-          "agentId"
+          "agentId",
+          "runNumber",
+          "resourceAddress",
+          "agentName"
         ],
         "type": "object",
         "properties": {
@@ -9018,12 +9064,32 @@
               "string"
             ],
             "format": "uuid"
+          },
+          "runNumber": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "resourceAddress": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "agentName": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
       "NotificationsDto": {
         "required": [
-          "items"
+          "items",
+          "nextBefore"
         ],
         "type": "object",
         "properties": {
@@ -9032,6 +9098,13 @@
             "items": {
               "$ref": "#/components/schemas/NotificationDto"
             }
+          },
+          "nextBefore": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
           }
         }
       },

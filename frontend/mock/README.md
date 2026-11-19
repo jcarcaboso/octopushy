@@ -30,14 +30,21 @@ down, jellyfin on media is degraded (its first link answers 502 since 40 minutes
 [/services](http://127.0.0.1:5176/services) lists the links under home.example.org, ops.example.org (fleet's three
 links, and open-webui) and No domain (technitium's address).
 
-Notifications: the bell starts with six, all unread. To see pop-ups, add some while a page is open; they show within
-ten seconds, and more than three at once fold into one line:
+Notifications: a month of them, about 115. Nothing is read at first: the bell counts the latest fifty as unread until it
+is closed, or until Mark all read on the inbox. To see pop-ups, add some while a page is open; they show within ten
+seconds, and more than three at once fold into one line:
 
 ```bash
 curl -X POST 'http://127.0.0.1:18280/api/mock/notifications?count=5'
 ```
 
-The [Notifications](http://127.0.0.1:5176/notifications) page shows a webhook set to `hooks.example.org`, whose last
+`GET /api/notifications` pages and filters as the server does (`before`, `after`, `limit`, `kind`, `q`, `nextBefore`).
+The [Notifications](http://127.0.0.1:5176/notifications) inbox shows today's runs awaiting approval, `home/pve01/dns`
+going down three times this morning (one folded line), korriban losing power two days ago, `home/pve01/old-proxy`, a
+machine since removed (its lines lead nowhere: "Gone"), and before that a month of the laptop agent sleeping and dns
+flapping, so "Load older" has a second page.
+
+The [webhook](http://127.0.0.1:5176/notifications/webhook) page shows a webhook set to `hooks.example.org`, whose last
 try failed with a 503. Saving a URL shows a made-up signing secret once. A test event is delivered, unless the URL's host
 has `down` in it.
 

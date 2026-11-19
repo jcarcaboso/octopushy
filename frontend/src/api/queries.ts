@@ -1,4 +1,5 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import { api, unwrap } from "./client";
 import type {
   AgentUpdate,
@@ -27,6 +28,7 @@ export const keys = {
   uptime: ["uptime"] as const,
   notifications: ["notifications"] as const,
   webhook: ["notifications", "webhook"] as const,
+  notificationInbox: (filter: { kinds: readonly string[]; q: string; after: number | null }) => ["notification-inbox", filter] as const,
   guest: (id: string) => ["guest", id] as const,
   service: (id: string) => ["service", id] as const,
   icons: ["icons"] as const,
@@ -99,6 +101,65 @@ export function useNotifications() {
     queryFn: () => unwrap(api.GET("/api/notifications")),
     refetchInterval: 10_000,
   });
+}
+
+/** What the inbox asks the server for: the kinds kept (all when empty), a text to look for and the id to list above. */
+export interface NotificationFilter {
+  kinds: readonly string[];
+  q: string;
+  after: number | null;
+}
+
+const INBOX_PAGE = 100;
+
+/**
+ * All notifications the server keeps, a page at a time, filtered on the server. It does not poll: when the bell's poll
+ * (`latest`, answered at `polledAt`) knows a newer notification than this filter's list was last brought up to, the
+ * loaded pages are fetched again, in order. Never while another fetch runs, so it and Load older never cancel each other,
+ * and at most once per poll, so a failure is tried again on the next one.
+ */
+export function useNotificationInbox(filter: NotificationFilter, latest: number, polledAt: number) {
+  const query = useInfiniteQuery({
+    queryKey: keys.notificationInbox(filter),
+    queryFn: ({ pageParam }) =>
+      unwrap(
+        api.GET("/api/notifications", {
+          params: {
+            query: {
+              limit: INBOX_PAGE,
+              before: pageParam ?? undefined,
+              after: filter.after ?? undefined,
+              kind: filter.kinds.length > 0 ? [...filter.kinds] : undefined,
+              q: filter.q || undefined,
+            },
+          },
+        }),
+      ),
+    initialPageParam: null as number | null,
+    getNextPageParam: (page) => page.nextBefore,
+    placeholderData: keepPreviousData,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const { data, isPlaceholderData, fetchStatus, refetch } = query;
+  const top = data?.pages[0]?.items[0]?.id ?? 0;
+  // Per filter, the bell's newest id its list was last fetched against, and the bell poll last tried.
+  const upTo = useRef(new Map<string, number>());
+  const tried = useRef(new Map<string, number>());
+  useEffect(() => {
+    // Idle, not only not fetching: a fetch paused while offline must not be replaced either.
+    if (!data || isPlaceholderData || fetchStatus !== "idle") return;
+    const key = JSON.stringify(filter);
+    if (latest <= Math.max(top, upTo.current.get(key) ?? 0) || tried.current.get(key) === polledAt) return;
+    tried.current.set(key, polledAt);
+    refetch({ cancelRefetch: false, throwOnError: true }).then(
+      () => upTo.current.set(key, latest),
+      () => {}, // tried again on the next poll
+    );
+  }, [data, isPlaceholderData, fetchStatus, latest, top, polledAt, filter, refetch]);
+
+  return query;
 }
 
 /** The webhook notifications are sent to: whether one is set, its host and how its sending stands. Never its URL. */

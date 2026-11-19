@@ -938,20 +938,92 @@ export function changeDraft(id: string, edits: { path: string; content: string |
 
 export const guestIds = guests.map((g) => g.id);
 
-// Notifications, newest first: what the mock's uptime and runs already show, as if told when it happened.
-const told = (id: number, at: string, kind: string, title: string, body: string | null,
-  to: Pick<NotificationItem, "resourceId" | "resourceKind" | "runId"> & { agentId?: string }): NotificationItem =>
-  ({ id, kind, title, body, createdAt: at, agentId: null, ...to });
-const jellyfin = { resourceId: "svc-jellyfin", resourceKind: "service", runId: null };
-export const notifications: NotificationItem[] = [
-  told(7, ago(5), "agent-offline", "Agent laptop is offline", null, { resourceId: null, resourceKind: null, runId: null, agentId: "agent-laptop" }),
-  told(6, ago(12), "run-approval", "Provision run awaits approval", "home/pve01/bb", { resourceId: "bb", resourceKind: "guest", runId: "provision-approval" }),
-  told(5, ago(40), "check-down", "home/pve01/media/jellyfin is down", "https://jellyfin.home.example.org/ · HTTP 502", jellyfin),
-  told(4, ago(300, 151), "run-failed", "Provision run failed", "home/pve01/media", { resourceId: "media", resourceKind: "guest", runId: "failed" }),
-  told(3, ago(1400), "check-up", "home/pve01/web/app is up again", "https://app.home.example.org/", { resourceId: "web-app", resourceKind: "service", runId: null }),
-  told(2, ago(1412), "check-down", "home/pve01/web/app is down", "https://app.home.example.org/ · HTTP 503", { resourceId: "web-app", resourceKind: "service", runId: null }),
-  told(1, ago(2880), "check-down", "home/korriban/nas is down", "ssh://10.15.60.30:22 · no route to host", { resourceId: "nas", resourceKind: "guest", runId: null }),
-];
+// Notifications, newest first, over the 31 days the server keeps: what the mock's uptime and runs already show, as if
+// told when it happened, and a month of history before it. Ids follow time, as on the server.
+interface Subject { resourceId: string | null; resourceKind: string | null; address: string | null; check?: string }
+const subject = (resourceId: string | null, resourceKind: string | null, address: string | null, check?: string): Subject =>
+  ({ resourceId, resourceKind, address, check });
+const at = {
+  korriban: subject("korriban", "installation", "home/korriban", "https://10.15.60.9:8006/"),
+  nas: subject("nas", "guest", "home/korriban/nas", "ssh://10.15.60.30:22"),
+  samba: subject("svc-samba", "service", "home/korriban/nas/samba", "tcp://10.15.60.40:445"),
+  dns: subject("dns", "guest", "home/pve01/dns", "tcp://10.15.60.21:53"),
+  jellyfin: subject("svc-jellyfin", "service", "home/pve01/media/jellyfin", "https://jellyfin.home.example.org/"),
+  app: subject("web-app", "service", "home/pve01/web/app", "https://app.home.example.org/"),
+  traefik: subject("svc-traefik", "service", "home/pve01/web/traefik", "https://traefik.home.example.org/dashboard/"),
+  // Removed from the lab since: the server finds neither its id nor its address any more.
+  oldProxy: { ...subject(null, null, null, "https://proxy.home.example.org/"), title: "home/pve01/old-proxy" },
+};
+const agentsById: Record<string, string> = { "agent-laptop": "laptop", "agent-pve01-02": "pve01-agent-02", "agent-media": "media-agent" };
+
+type Told = Omit<NotificationItem, "id">;
+const told: { minutes: number; item: Told }[] = [];
+const blank = { body: null, resourceId: null, resourceKind: null, runId: null, agentId: null, runNumber: null, resourceAddress: null, agentName: null };
+const tell = (minutes: number, item: Partial<Told> & Pick<Told, "kind" | "title">) =>
+  told.push({ minutes, item: { ...blank, createdAt: ago(minutes), ...item } });
+const on = (s: Subject) => ({ resourceId: s.resourceId, resourceKind: s.resourceKind, resourceAddress: s.address });
+const named = (s: Subject & { title?: string }) => s.title ?? s.address;
+const down = (minutes: number, s: Subject & { title?: string }, detail: string) =>
+  tell(minutes, { kind: "check-down", title: `${named(s)} is down`, body: `${s.check} · ${detail}`, ...on(s) });
+const up = (minutes: number, s: Subject & { title?: string }) => tell(minutes, { kind: "check-up", title: `${named(s)} is up again`, body: s.check, ...on(s) });
+const outage = (minutes: number, s: Subject & { title?: string }, length: number, detail: string) => {
+  down(minutes, s, detail);
+  up(minutes - length, s);
+};
+const endings: Record<string, string> = { "run-approval": "awaits approval", "run-failed": "failed", "run-uncertain": "has an uncertain outcome" };
+const ran = (minutes: number, kind: string, operation: string, runId: string, runNumber: number, s: Subject) =>
+  tell(minutes, { kind, title: `${operation} run ${endings[kind]}`, body: s.address, runId, runNumber, ...on(s) });
+const agent = (minutes: number, kind: string, agentId: string) => {
+  const name = agentsById[agentId];
+  const title = { "agent-offline": `Agent ${name} is offline`, "agent-online": `Agent ${name} is connected again`,
+    "agent-update-failed": `Update of agent ${name} failed` }[kind]!;
+  tell(minutes, { kind, title, agentId, agentName: name });
+};
+
+// Today and yesterday.
+agent(5, "agent-offline", "agent-laptop");
+ran(12, "run-approval", "Provision", "provision-approval", 49, subject("bb", "guest", "home/pve01/bb"));
+ran(25, "run-approval", "Configure", "configure-approval", 48, subject("pve01-ai", "guest", "home/pve01/pve01-ai"));
+ran(31, "run-approval", "Pipeline", "pipeline-approval", 47, at.app);
+ran(34, "run-approval", "Configure", "outcome-approval", 46, subject("dev", "guest", "home/pve01/dev"));
+down(40, at.jellyfin, "HTTP 502");
+ran(70, "run-failed", "Pipeline", "pipeline-failed", 51, at.jellyfin);
+// dns flaps: three times down and up again within the hour.
+outage(262, at.dns, 3, "No answer within 5 seconds");
+outage(241, at.dns, 6, "No answer within 5 seconds");
+outage(220, at.dns, 2, "No answer within 5 seconds");
+ran(302.5, "run-failed", "Provision", "failed", 44, subject("media", "guest", "home/pve01/media"));
+agent(606, "agent-update-failed", "agent-pve01-02");
+agent(604, "agent-offline", "agent-pve01-02");
+agent(595, "agent-online", "agent-pve01-02");
+outage(1412, at.app, 12, "HTTP 503");
+ran(1700, "run-uncertain", "Provision", "history-bb", 43, subject("bb", "guest", "home/pve01/bb"));
+// korriban lost power two days ago and has not come back.
+down(2885, at.korriban, "No answer within 5 seconds");
+down(2880, at.nas, "no route to host");
+down(2879, at.samba, "Could not connect.");
+ran(2950, "run-approval", "Configure", "history-rejected", 42, subject("dev", "guest", "home/pve01/dev"));
+// A machine since removed from the lab: nothing to lead to.
+outage(4300, at.oldProxy, 14, "HTTP 502");
+// A month before: the laptop sleeps most nights, dns flaps every third day and traefik stumbles now and then.
+for (let day = 4; day <= 30; day++) {
+  const base = day * 1440;
+  if (day % 4 !== 0) {
+    agent(base + 120, "agent-offline", "agent-laptop");
+    agent(base - 540, "agent-online", "agent-laptop");
+  }
+  if (day % 3 === 0) {
+    outage(base + 300, at.dns, 4, "No answer within 5 seconds");
+    outage(base + 280, at.dns, 3, "No answer within 5 seconds");
+  }
+  if (day % 5 === 0) outage(base - 200, at.traefik, 8, "HTTP 502");
+  if (day === 9) agent(base, "agent-update-failed", "agent-media");
+}
+
+export const notifications: NotificationItem[] = told
+  .sort((a, b) => b.minutes - a.minutes)
+  .map(({ item }, i) => ({ id: 1000 + i, ...item }))
+  .reverse();
 
 // The webhook: set, with its last delivery failed and tried again in a minute. The mock keeps no URL, as the server shows none.
 export const webhook: Webhook = {
@@ -975,8 +1047,10 @@ export const webhook: Webhook = {
 
 /** Adds one more, alternating jellyfin's first link going up and down. */
 export function notify() {
-  const id = notifications[0].id + 1;
-  const up = notifications[0].kind === "check-down";
-  notifications.unshift(told(id, new Date().toISOString(), up ? "check-up" : "check-down", `home/pve01/media/jellyfin is ${up ? "up again" : "down"}`,
-    up ? "https://jellyfin.home.example.org/" : "https://jellyfin.home.example.org/ · HTTP 502", jellyfin));
+  const isUp = notifications[0].kind === "check-down";
+  const { check, address } = at.jellyfin;
+  notifications.unshift({
+    ...blank, ...on(at.jellyfin), id: notifications[0].id + 1, createdAt: new Date().toISOString(), kind: isUp ? "check-up" : "check-down",
+    title: `${address} is ${isUp ? "up again" : "down"}`, body: isUp ? check! : `${check} · HTTP 502`,
+  });
 }

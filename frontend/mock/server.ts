@@ -95,7 +95,24 @@ on("DELETE", "/api/auth/operator-tokens/{id}", ({ params }) => {
 on("GET", "/api/overview", data.overview);
 on("GET", "/api/inventory", data.inventory);
 on("GET", "/api/uptime", () => uptime(data.inventory()));
-on("GET", "/api/notifications", () => ({ items: data.notifications.slice(0, 50) }));
+// A page at a time, newest first, with the server's filters: before/after bound the ids, kind keeps those named, q looks
+// in the title and body ignoring case. nextBefore is the next page's `before`, or null.
+const notificationKinds = ["check-down", "check-up", "run-approval", "run-failed", "run-uncertain", "agent-offline", "agent-online", "agent-update-failed"];
+on("GET", "/api/notifications", ({ query }) => {
+  const take = query.has("limit") ? Number(query.get("limit")) : 50;
+  if (!Number.isInteger(take) || take < 1 || take > 200) return problem(400, "List between 1 and 200 notifications at a time.");
+  const kinds = query.getAll("kind").filter(Boolean);
+  if (kinds.some((k) => !notificationKinds.includes(k))) return problem(400, `A kind is one of ${notificationKinds.join(", ")}.`);
+  const text = (query.get("q") ?? "").trim().toLowerCase();
+  if (text.length > 200) return problem(400, "Search for at most 200 characters.");
+  const before = query.has("before") ? Number(query.get("before")) : Infinity;
+  const after = query.has("after") ? Number(query.get("after")) : -Infinity;
+  const found = data.notifications.filter((n) =>
+    n.id < before && n.id > after && (kinds.length === 0 || kinds.includes(n.kind)) &&
+    (!text || n.title.toLowerCase().includes(text) || (n.body ?? "").toLowerCase().includes(text)));
+  const items = found.slice(0, take);
+  return { items, nextBefore: found.length > take ? items[items.length - 1].id : null };
+});
 // Mock only: adds `count` notifications, to see them pop up. See README.md.
 on("POST", "/api/mock/notifications", ({ query }) => {
   for (let i = 0; i < (Number(query.get("count")) || 1); i++) data.notify();
