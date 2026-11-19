@@ -78,8 +78,13 @@ public class HeartbeatTests(PostgresFixture postgres) : IClassFixture<PostgresFi
         var oldLease = clock.GetUtcNow().AddSeconds(-1);
         var attempt = new Attempt
         {
-            Id = Guid.NewGuid(), Executor = "proxmox", Action = "observe", AgentId = agent,
-            Status = AttemptStatuses.Running, LeaseExpiresAt = oldLease, CreatedAt = clock.GetUtcNow(),
+            Id = Guid.NewGuid(),
+            Executor = "proxmox",
+            Action = "observe",
+            AgentId = agent,
+            Status = AttemptStatuses.Running,
+            LeaseExpiresAt = oldLease,
+            CreatedAt = clock.GetUtcNow(),
         };
         await server.WithDbAsync(async db =>
         {
