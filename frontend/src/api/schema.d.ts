@@ -2041,9 +2041,15 @@ export interface components {
             createdAt: string;
             /** Format: uuid */
             agentId: null | string;
+            /** Format: int64 */
+            runNumber: null | number;
+            resourceAddress: null | string;
+            agentName: null | string;
         };
         NotificationsDto: {
             items: components["schemas"]["NotificationDto"][];
+            /** Format: int64 */
+            nextBefore: null | number;
         };
         ObserveErrorDto: {
             /** Format: uuid */
@@ -4586,7 +4592,13 @@ export interface operations {
     };
     listNotifications: {
         parameters: {
-            query?: never;
+            query?: {
+                before?: number;
+                after?: number;
+                limit?: number;
+                kind?: string[];
+                q?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;

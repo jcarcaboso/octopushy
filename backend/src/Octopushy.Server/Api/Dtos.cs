@@ -777,11 +777,13 @@ public sealed record UptimeCheckDto(
 public sealed record UptimePercentagesDto(double? Day, double? Week, double? Month);
 
 /// <summary>The latest notifications, newest first. See docs/notifications.md.</summary>
-public sealed record NotificationsDto(IReadOnlyList<NotificationDto> Items);
+/// <summary>A page of notifications, newest first. <c>NextBefore</c> is the <c>before</c> of the next page, or null when this is the last.</summary>
+public sealed record NotificationsDto(IReadOnlyList<NotificationDto> Items, long? NextBefore);
 
 /// <summary>
 /// One thing an operator is told. <c>Kind</c> is one of <see cref="Data.NotificationKinds"/>.
-/// <c>Id</c> ascends in the order they were added. <c>ResourceKind</c> is null once the resource is gone.
+/// <c>Id</c> ascends in the order they were added. <c>ResourceKind</c> and <c>ResourceAddress</c> are null once the resource is gone,
+/// and <c>AgentName</c> once the agent is. <c>RunNumber</c> is the run's number, for the run kinds.
 /// </summary>
 public sealed record NotificationDto(long Id, string Kind, string Title, string? Body, Guid? ResourceId, string? ResourceKind, Guid? RunId,
-    DateTimeOffset CreatedAt, Guid? AgentId);
+    DateTimeOffset CreatedAt, Guid? AgentId, long? RunNumber, string? ResourceAddress, string? AgentName);

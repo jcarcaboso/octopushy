@@ -150,14 +150,59 @@ public sealed class NotificationHub(TimeProvider clock, WebhookSignal? published
         return result;
     }
 
+    /// <summary>The most one page of the list may hold.</summary>
+    public const int MaxListed = 200;
+
+    /// <summary>
+    /// Lists notifications newest first, a page at a time. With no parameters it is the latest <see cref="Listed"/>, which the
+    /// bell reads. <c>before</c> and <c>after</c> bound the ids, <c>kind</c> keeps the kinds named (repeat it for more than one),
+    /// and <c>q</c> keeps those whose title or body holds the text, ignoring case. <c>NextBefore</c> is the id to pass as
+    /// <c>before</c> for the next page, or null when there is none.
+    /// </summary>
     public static void MapNotifications(RouteGroupBuilder api)
     {
-        api.MapGet("/notifications", async Task<Ok<NotificationsDto>> (OctopushyDb db, CancellationToken ct) =>
-            TypedResults.Ok(new NotificationsDto(await db.Notifications.AsNoTracking().OrderByDescending(n => n.Id).Take(Listed)
+        api.MapGet("/notifications", async Task<Results<Ok<NotificationsDto>, ProblemHttpResult>> (OctopushyDb db, long? before, long? after,
+            int? limit, string[]? kind, string? q, CancellationToken ct) =>
+        {
+            var take = limit ?? Listed;
+            if (take is < 1 or > MaxListed)
+                return TypedResults.Problem(title: $"List between 1 and {MaxListed} notifications at a time.", statusCode: 400);
+            var kinds = kind?.Where(k => !string.IsNullOrEmpty(k)).Distinct().ToArray() ?? [];
+            if (kinds.Any(k => !NotificationKinds.All.Contains(k)))
+                return TypedResults.Problem(title: $"A kind is one of {string.Join(", ", NotificationKinds.All)}.", statusCode: 400);
+            var text = q?.Trim();
+            if (text is { Length: > 200 })
+                return TypedResults.Problem(title: "Search for at most 200 characters.", statusCode: 400);
+
+            var query = db.Notifications.AsNoTracking();
+            if (before is not null)
+                query = query.Where(n => n.Id < before);
+            if (after is not null)
+                query = query.Where(n => n.Id > after);
+            if (kinds.Length > 0)
+                query = query.Where(n => kinds.Contains(n.Kind));
+            if (!string.IsNullOrEmpty(text))
+            {
+                // Contains is strpos, not LIKE, so the text's % and _ match themselves.
+                var lower = text.ToLowerInvariant();
+                query = query.Where(n => n.Title.ToLower().Contains(lower) || (n.Body != null && n.Body.ToLower().Contains(lower)));
+            }
+
+            // One more than a page tells whether another page follows.
+            var items = await query.OrderByDescending(n => n.Id).Take(take + 1)
                 .Select(n => new NotificationDto(n.Id, n.Kind, n.Title, n.Body, n.ResourceId,
-                    db.Resources.Where(r => r.Id == n.ResourceId).Select(r => r.Kind).FirstOrDefault(), n.RunId, n.CreatedAt, n.AgentId))
-                .ToListAsync(ct))))
+                    db.Resources.Where(r => r.Id == n.ResourceId).Select(r => r.Kind).FirstOrDefault(), n.RunId, n.CreatedAt, n.AgentId,
+                    db.Runs.Where(r => r.Id == n.RunId).Select(r => (long?)r.Number).FirstOrDefault(),
+                    db.Resources.Where(r => r.Id == n.ResourceId).Select(r => r.Address).FirstOrDefault(),
+                    db.Agents.Where(a => a.Id == n.AgentId).Select(a => a.Name).FirstOrDefault()))
+                .ToListAsync(ct);
+            var more = items.Count > take;
+            if (more)
+                items.RemoveAt(take);
+            return TypedResults.Ok(new NotificationsDto(items, more ? items[^1].Id : null));
+        })
             .WithTags("Notifications")
-            .WithName("listNotifications");
+            .WithName("listNotifications")
+            .ProducesProblem(StatusCodes.Status400BadRequest);
     }
 }
