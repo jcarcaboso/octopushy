@@ -183,9 +183,9 @@ export function NotificationsPage() {
     [group, q, unreadOnly, seen],
   );
   // The bell's own poll of the latest: it says how many are unread and when something new arrived.
-  const latest = useNotifications().data;
+  const { data: latest, dataUpdatedAt: polledAt } = useNotifications();
   const latestId = latest?.items[0]?.id ?? 0;
-  const inbox = useNotificationInbox(filter, latestId);
+  const inbox = useNotificationInbox(filter, latestId, polledAt);
   const items = useMemo(() => inbox.data?.pages.flatMap((page) => page.items) ?? [], [inbox.data]);
   const days = useMemo(() => byDay(items), [items]);
 
@@ -304,7 +304,7 @@ export function NotificationsPage() {
           <ErrorMessage error={inbox.isFetchNextPageError ? inbox.error : null} title="Older notifications could not be loaded" />
           {inbox.hasNextPage ? (
             <div className="inbox__foot">
-              <button type="button" className="button" disabled={inbox.isFetchingNextPage} onClick={() => void inbox.fetchNextPage()}>
+              <button type="button" className="button" disabled={inbox.isFetching} onClick={() => void inbox.fetchNextPage()}>
                 {inbox.isFetchingNextPage ? "Loading…" : "Load older"}
               </button>
             </div>

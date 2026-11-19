@@ -1,5 +1,5 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { api, unwrap } from "./client";
 import type {
   AgentUpdate,
@@ -114,9 +114,11 @@ const INBOX_PAGE = 100;
 
 /**
  * All notifications the server keeps, a page at a time, filtered on the server. It does not poll: when the bell's poll
- * brings a newer one (`latest`) than the newest listed, the pages loaded are fetched again, in order, by React Query.
+ * (`latest`, answered at `polledAt`) knows a newer notification than this filter's list was last brought up to, the
+ * loaded pages are fetched again, in order. Never while another fetch runs, so it and Load older never cancel each other,
+ * and at most once per poll, so a failure is tried again on the next one.
  */
-export function useNotificationInbox(filter: NotificationFilter, latest: number) {
+export function useNotificationInbox(filter: NotificationFilter, latest: number, polledAt: number) {
   const query = useInfiniteQuery({
     queryKey: keys.notificationInbox(filter),
     queryFn: ({ pageParam }) =>
@@ -140,11 +142,21 @@ export function useNotificationInbox(filter: NotificationFilter, latest: number)
     refetchOnWindowFocus: false,
   });
 
-  const top = query.data?.pages[0]?.items[0]?.id ?? 0;
-  const { isSuccess, refetch } = query;
+  const { data, isPlaceholderData, isFetching, refetch } = query;
+  const top = data?.pages[0]?.items[0]?.id ?? 0;
+  // Per filter, the bell's newest id its list was last fetched against; and the poll last tried, per filter.
+  const upTo = useRef(new Map<string, number>());
+  const tried = useRef("");
   useEffect(() => {
-    if (isSuccess && latest > top) void refetch();
-  }, [isSuccess, latest, top, refetch]);
+    if (!data || isPlaceholderData || isFetching) return;
+    const key = JSON.stringify(filter);
+    const attempt = `${key}@${polledAt}`;
+    if (latest <= Math.max(top, upTo.current.get(key) ?? 0) || tried.current === attempt) return;
+    tried.current = attempt;
+    void refetch().then((result) => {
+      if (!result.isError) upTo.current.set(key, latest);
+    });
+  }, [data, isPlaceholderData, isFetching, latest, top, polledAt, filter, refetch]);
 
   return query;
 }

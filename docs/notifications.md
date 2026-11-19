@@ -63,7 +63,7 @@ update that fails.
 
 `GET /api/notifications` returns a page of notifications, newest first: with no parameters, the latest fifty. `limit`
 sets how many, from 1 to 200. `before` and `after` keep ids below or above one. `kind`, repeated for more than one, keeps
-those kinds. `q` keeps those whose title or body holds the text, ignoring case; `%` and `_` in it match only
+those kinds. `q`, at most 200 characters, keeps those whose title or body holds the text, ignoring case; `%` and `_` in it match only
 themselves. Anything out of these bounds, or an unknown kind, is a 400. The answer's `nextBefore` is the `before` for the
 next page, or null on the last. Each item also carries its run's number, its resource's address and its agent's name,
 each null once that row is gone. Rows are never changed, and they are deleted after 31

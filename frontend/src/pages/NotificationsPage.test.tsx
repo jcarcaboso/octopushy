@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { keys } from "../api/queries";
 import type { NotificationItem } from "../api/types";
 import { Notifications } from "../components/Notifications";
-import { mockApi, type RecordedRequest } from "../test/utils";
+import { mockApi, problem, type RecordedRequest } from "../test/utils";
 import { NotificationsPage } from "./NotificationsPage";
 
 /** A local time on November 2026, so Today and Yesterday do not depend on when the test runs. */
@@ -207,4 +207,76 @@ it("puts what the bell's poll brings on top, fetching the loaded pages again", a
   expect(await screen.findByRole("link", { name: /home\/pve01\/web\/app is down/ })).toBeVisible();
   const after = inboxRequests(requests).slice(asked);
   expect(after.map((query) => query.toString())).toEqual(["limit=100"]);
+});
+
+it("fetches what the bell brings only once Load older is done, so neither cancels the other", async () => {
+  const user = userEvent.setup();
+  let latest = month;
+  let release = () => {};
+  const older = new Promise<void>((resolve) => (release = resolve));
+  show({
+    "GET /api/notifications": bellOr(
+      () => page(latest),
+      async (r) => {
+        if (new URLSearchParams(r.search).get("before") === "15") {
+          await older;
+          return page(month.filter((item) => item.id < 15));
+        }
+        return page(latest.filter((item) => item.id >= 15), 15);
+      },
+    ),
+  });
+  await screen.findByRole("region", { name: "Today" });
+  await user.click(screen.getByRole("button", { name: "Load older" }));
+  expect(screen.getByRole("button", { name: "Loading…" })).toBeDisabled();
+
+  latest = [told(21, at(19, 14, 59), "home/pve01/web/app is down", { resourceId: "web-app", resourceKind: "service", resourceAddress: "home/pve01/web/app" }), ...month];
+  await act(() => client.refetchQueries({ queryKey: keys.notifications, exact: true }));
+  release();
+
+  expect(await screen.findByRole("region", { name: "Yesterday" })).toBeVisible();
+  expect(await within(screen.getByRole("region", { name: "Today" })).findByRole("link", { name: /home\/pve01\/web\/app is down/ })).toBeVisible();
+  expect(screen.getByRole("region", { name: "Yesterday" })).toBeVisible();
+});
+
+it("disables Load older while the new are fetched", async () => {
+  let latest = month;
+  let release = () => {};
+  const fresh = told(21, at(19, 14, 59), "home/pve01/web/app is down", { resourceId: "web-app", resourceKind: "service", resourceAddress: "home/pve01/web/app" });
+  show({
+    "GET /api/notifications": bellOr(
+      () => page(latest),
+      async () => {
+        if (latest !== month) await new Promise<void>((resolve) => (release = resolve));
+        return page(latest.filter((item) => item.id >= 15), 15);
+      },
+    ),
+  });
+  await screen.findByRole("region", { name: "Today" });
+  latest = [fresh, ...month];
+  await act(() => client.refetchQueries({ queryKey: keys.notifications, exact: true }));
+
+  await waitFor(() => expect(screen.getByRole("button", { name: "Load older" })).toBeDisabled());
+  release();
+  expect(await within(screen.getByRole("region", { name: "Today" })).findByRole("link", { name: /home\/pve01\/web\/app is down/ })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Load older" })).toBeEnabled();
+});
+
+it("tries again on the bell's next poll when fetching the new failed", async () => {
+  let latest = month;
+  let failing = false;
+  let failed = 0;
+  show({ "GET /api/notifications": bellOr(() => page(latest), () => (failing ? (failed++, problem(500, "Down")) : page(latest))) });
+  await screen.findByRole("region", { name: "Today" });
+  failing = true;
+  latest = [told(21, at(19, 14, 59), "home/pve01/web/app is down", { resourceId: "web-app", resourceKind: "service", resourceAddress: "home/pve01/web/app" }), ...month];
+  await act(() => client.refetchQueries({ queryKey: keys.notifications, exact: true }));
+  await waitFor(() => expect(failed).toBe(1));
+  expect(within(screen.getByRole("region", { name: "Today" })).queryByRole("link", { name: /home\/pve01\/web\/app is down/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Today" })).toBeVisible();
+
+  failing = false;
+  vi.setSystemTime(new Date(2026, 10, 19, 15, 0, 10)); // the next poll, ten seconds on
+  await act(() => client.refetchQueries({ queryKey: keys.notifications, exact: true }));
+  expect(await within(screen.getByRole("region", { name: "Today" })).findByRole("link", { name: /home\/pve01\/web\/app is down/ })).toBeVisible();
 });
