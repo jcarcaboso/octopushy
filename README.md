@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.9.5:
+Milestone 1 has shipped, up to release 0.10.0:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,65 @@ Milestone 1 has shipped, up to release 0.9.5:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.10.0:
+
+- Guests that were not made by Octopushy, and guests that moved:
+  - **Attach** a VM that already exists, from #151: the installation page offers **Attach** on each
+    unmanaged VM, and the wizard writes a guest with `machine: attached`. Its attach run verifies the
+    VM, turns its protection on with the privileged token and binds the guest, and its approval is the
+    attaching person's decision. An attached guest is never provisioned or retired, only set up and
+    served.
+  - **Detach** a guest, from #150: **Detach** removes its folder in one commit, and the sync forgets the
+    guest — its binding, reservation, OpenTofu state and Octopushy's keys for it are deleted, its runs
+    cancelled — and nothing is sent to Proxmox. Runs stay on record, and the guest shows as detached, by
+    whom and when.
+  - A bound VM is moved between the hosts of its cluster by a plan that migrates it, from #148, and a
+    VM moved in Proxmox shows **Accept placement** on its guest's page. A plan that would replace a VM
+    to move it is refused, with how to migrate it instead.
+  - A plan that would create again the machine a guest is bound to waits for a person whatever the
+    policy says, from #147, so a VM deleted outside Octopushy is not quietly replaced by an empty one.
+    A guest whose bound VM is gone or moved says so on its page and in the inventory.
+  - A quorate cluster may be deployed to while one of its nodes is off, from #149.
+- The run page is a digest, from #152: a verdict card of how the run ended or where it stands, then
+  one line per kind of change and one row per step, each opening in place, a failed one open with its
+  error and log. It also lists each service's image at the run's commit and at the commit last
+  applied, so an image bump is visible before approval.
+- [Notifications](docs/notifications.md), from #153 and #168: the bell lists what turned, failed or
+  waits for approval, a pop-up tells each one while the page is open, and one signed webhook can post
+  them to a receiver you choose.
+- Agent updates are safe to leave unattended, from #189: an update is held until the agent is idle and
+  no change that may restart it is still settling, one that cannot be done fails with its reason, and
+  the Agents page records the agent's previous version and offers **Revert** to it.
+- An agent says why it cannot take work, from #166: a missing executor comes with its reason, its
+  executors are probed again while it runs and a change is reported without reconnecting, and its free
+  disk and cache sizes show on the Agents page.
+- Why a run ended or waits is recorded, from #170, not read back out of message wording, and a run's
+  approval is decided by the decider its kind names, from #165; a kind without one is refused.
+- The steps that are safe to repeat are retried, from #154: a Proxmox read, `tofu init` and an image
+  pull are tried up to three times with the reason in the attempt log, and an image is pulled in its
+  own step before the tool first runs, so a registry failure fails the pull and not the run.
+- Sessions are hardened, from #160: signing out ends the account's session in every browser, a
+  session ends seven days after signing in (`Octopushy:Sessions:AbsoluteLifetimeDays`) however often it
+  is renewed, and the session-signing key ring is encrypted under the KEK — existing cookies stay
+  valid. From #155: the OpenAPI document requires a session, sign-in is limited per user name, and a
+  forwarded address is trusted only from the proxy's network. From #159: repository content and agent
+  logs the server accepts are limited in size.
+- The local runtime runs each tool as a user of its own, from #191, and cleans up after itself, from
+  #162: leftover tool containers are removed at startup, tool processes are limited, and the runtime's
+  environment stays off the tool. The top findings of the November security review are closed, from
+  #193.
+- Under the hood, from #158, #161, #173, #164 and #156: an attempt is marked changing only when its
+  change starts, waiting runs advance when something is saved and once a minute otherwise, an
+  assignment the server never began to write is put back rather than lost, attempt logs are sought
+  through an index of line offsets, and the polled run lists load only what their summary shows.
+
+Upgrading: nine migrations (`GuestDetachment`, `GuestAttachment`, `Notifications`, `SessionStamps`,
+`DropAttemptLogLines`, `AgentUnavailable`, `NotificationWebhook`, `RunReasonsAndIssueSources` and
+`AgentUpdateRevert`) run on start. Stop the old backend before starting the new one: only one server
+may own the database. The agent contract grows and stays compatible: update the backend first; older
+agents keep working, and missing-executor reasons, executor re-probes and free-disk figures need
+agents at 0.10.0.
 
 New in 0.9.5:
 
