@@ -142,21 +142,22 @@ export function useNotificationInbox(filter: NotificationFilter, latest: number,
     refetchOnWindowFocus: false,
   });
 
-  const { data, isPlaceholderData, isFetching, refetch } = query;
+  const { data, isPlaceholderData, fetchStatus, refetch } = query;
   const top = data?.pages[0]?.items[0]?.id ?? 0;
-  // Per filter, the bell's newest id its list was last fetched against; and the poll last tried, per filter.
+  // Per filter, the bell's newest id its list was last fetched against, and the bell poll last tried.
   const upTo = useRef(new Map<string, number>());
-  const tried = useRef("");
+  const tried = useRef(new Map<string, number>());
   useEffect(() => {
-    if (!data || isPlaceholderData || isFetching) return;
+    // Idle, not only not fetching: a fetch paused while offline must not be replaced either.
+    if (!data || isPlaceholderData || fetchStatus !== "idle") return;
     const key = JSON.stringify(filter);
-    const attempt = `${key}@${polledAt}`;
-    if (latest <= Math.max(top, upTo.current.get(key) ?? 0) || tried.current === attempt) return;
-    tried.current = attempt;
-    void refetch().then((result) => {
-      if (!result.isError) upTo.current.set(key, latest);
-    });
-  }, [data, isPlaceholderData, isFetching, latest, top, polledAt, filter, refetch]);
+    if (latest <= Math.max(top, upTo.current.get(key) ?? 0) || tried.current.get(key) === polledAt) return;
+    tried.current.set(key, polledAt);
+    refetch({ cancelRefetch: false, throwOnError: true }).then(
+      () => upTo.current.set(key, latest),
+      () => {}, // tried again on the next poll
+    );
+  }, [data, isPlaceholderData, fetchStatus, latest, top, polledAt, filter, refetch]);
 
   return query;
 }

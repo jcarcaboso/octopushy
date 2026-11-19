@@ -280,3 +280,35 @@ it("tries again on the bell's next poll when fetching the new failed", async () 
   await act(() => client.refetchQueries({ queryKey: keys.notifications, exact: true }));
   expect(await within(screen.getByRole("region", { name: "Today" })).findByRole("link", { name: /home\/pve01\/web\/app is down/ })).toBeVisible();
 });
+
+it("tries a filter's failed refresh again on the next poll, even when another filter answered meanwhile", async () => {
+  const user = userEvent.setup();
+  let latest = month;
+  let failing = false;
+  let release = () => {};
+  show({
+    "GET /api/notifications": bellOr(
+      () => page(latest),
+      async (r) => {
+        const all = !new URLSearchParams(r.search).has("kind");
+        if (all && failing) {
+          await new Promise<void>((resolve) => (release = resolve));
+          return problem(500, "Down");
+        }
+        return page(all ? latest : latest.filter((item) => item.kind.startsWith("run-")));
+      },
+    ),
+  });
+  await screen.findByRole("region", { name: "Today" });
+  failing = true;
+  latest = [told(21, at(19, 14, 59), "home/pve01/web/app is down", { resourceId: "web-app", resourceKind: "service", resourceAddress: "home/pve01/web/app" }), ...month];
+  await act(() => client.refetchQueries({ queryKey: keys.notifications, exact: true }));
+  await user.click(screen.getByRole("button", { name: "Runs" }));
+  release();
+  failing = false;
+
+  await user.click(screen.getByRole("button", { name: "All" }));
+  vi.setSystemTime(new Date(2026, 10, 19, 15, 0, 10)); // the next poll, ten seconds on
+  await act(() => client.refetchQueries({ queryKey: keys.notifications, exact: true }));
+  expect(await within(screen.getByRole("region", { name: "Today" })).findByRole("link", { name: /home\/pve01\/web\/app is down/ })).toBeVisible();
+});

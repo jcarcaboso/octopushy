@@ -304,7 +304,7 @@ export function NotificationsPage() {
           <ErrorMessage error={inbox.isFetchNextPageError ? inbox.error : null} title="Older notifications could not be loaded" />
           {inbox.hasNextPage ? (
             <div className="inbox__foot">
-              <button type="button" className="button" disabled={inbox.isFetching} onClick={() => void inbox.fetchNextPage()}>
+              <button type="button" className="button" disabled={inbox.fetchStatus !== "idle"} onClick={() => void inbox.fetchNextPage({ cancelRefetch: false })}>
                 {inbox.isFetchingNextPage ? "Loading…" : "Load older"}
               </button>
             </div>
