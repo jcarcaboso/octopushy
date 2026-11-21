@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.10.1:
+Milestone 1 has shipped, up to release 0.11.0:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,33 @@ Milestone 1 has shipped, up to release 0.10.1:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.11.0:
+
+- **Reports and peers**, from #201 and [ADR 0010](docs/adr/0010-guests-report-to-their-peers.md): a workflow with a setup
+  stage can declare `reports`, the values its playbooks hand back with `set_stats` as `octopushy_reports`, each with a
+  pattern, and `peers`, a path into a guest's inputs that names other guests. Octopushy keeps a value only from the
+  guest's own configure run whose playbook ended as it meant to, over the guest's pinned host key, and gives it to the
+  guest's peers in `octopushy.peers`. What a run gets is fixed when the run is made and goes into the manifest the
+  approval covers, and a change proposes the guest's setup once, with the reason `peer`. A guest can no longer set, in
+  `inputs`, `secrets` or `secretFiles`, a var that approving an outcome of its workflow sets. See
+  [workflows](docs/workflows.md#reports-and-peers).
+- **Wake a Proxmox host**, from #198: a host whose `installation.yaml` gives it `wakeOnLan` (a `mac` and an optional
+  `broadcast`) gets a **Wake** button on its installation's page while it is not known to be online. Every connected agent
+  that announces `wake-on-lan-v1` sends the magic packet. See [Wake-on-LAN](docs/wake-on-lan.md).
+- **Links on a guest**, from #200: `links: [{ label, url }]` in `guest.yaml` shows buttons on the guest's page and its
+  Inventory details, beside Open in Proxmox. They are display metadata: changing them runs nothing and nothing probes them.
+- **Service groups**, from #199: `group: { id, name }` in `service.yaml` gathers services into one section of the Services
+  page, across guests and domains.
+- **Purge unused secrets**, from #202: the Variables page has an Options menu whose **Purge** lists and deletes every secret
+  nothing uses, and then says what went and what was kept, and why. It is `POST /api/variables/purge`, which applies the
+  checks of deleting one key.
+
+Upgrading: one migration, `GuestReports`, which adds two columns to the guests' configuration, runs on start. Stop the
+old backend before starting the new one: only one server may own the database. The agent contract grows and stays
+compatible: update the backend first; older agents keep working. Wake-on-LAN needs agents at 0.11.0, and a workflow that
+declares `reports` or `peers` needs the new backend and the Ansible image of this release
+(`ansible-2.21.5-55176118cb4a`), whose callback passes `octopushy_reports` on.
 
 New in 0.10.1:
 
