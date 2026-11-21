@@ -49,6 +49,7 @@ const reasons: Record<string, string> = {
   manual: "Started by hand",
   schedule: "Scheduled",
   secret: "Store value changed",
+  peer: "A peer reported",
 };
 
 export function reasonLabel(reason: string): string {

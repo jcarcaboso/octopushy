@@ -15,13 +15,19 @@ DOCUMENTATION = """
     type: notification
     short_description: Reports a summary of the run to Octopushy
     description:
-      - Writes counts, the failed task's name and a declared outcome to stderr as one line.
+      - Writes counts, the failed task's name, a declared outcome and reported values to stderr as one line.
 """
 
 PREFIX = "octopushy-recap: "
 # Bytes as written, escaping included. Five of these and the counts have to fit on one line of
 # the agent's 32 KiB, or the only record of how the run ended would be dropped.
 MAX_TEXT = 5120
+# What octopushy_reports may hold: a few short values, such as a certificate's fingerprint. Sizes are
+# bytes as written, escaping included, so the worst of them still fits beside five texts. A name or
+# value past these is left out whole, never cut, and the workflow's patterns decide the rest.
+MAX_REPORTS = 8
+MAX_REPORT_NAME = 64
+MAX_REPORT_VALUE = 256
 
 
 def encoded(text):
@@ -36,6 +42,26 @@ def bounded(value):
     text = str(value)
     fits = len(encoded(json.dumps(text, ensure_ascii=False))) <= MAX_TEXT
     return text if fits else "(too long to report)"
+
+
+def written(text):
+    return len(encoded(json.dumps(text, ensure_ascii=False)))
+
+
+def reports(value):
+    """The names and values a playbook reported, as text: what is not one is left out."""
+    if not isinstance(value, dict):
+        return {}
+    kept = {}
+    for name, text in value.items():
+        if len(kept) >= MAX_REPORTS:
+            break
+        if not isinstance(name, str) or not isinstance(text, str) or not name or not text:
+            continue
+        if written(name) > MAX_REPORT_NAME or written(text) > MAX_REPORT_VALUE:
+            continue
+        kept[name] = text
+    return kept
 
 
 class CallbackModule(CallbackBase):
@@ -87,6 +113,8 @@ class CallbackModule(CallbackBase):
             self.result["outcome"] = bounded(custom["octopushy_outcome"])
         if "octopushy_detail" in custom:
             self.result["detail"] = bounded(custom["octopushy_detail"])
+        if "octopushy_reports" in custom:
+            self.result["reports"] = reports(custom["octopushy_reports"])
         if self.enabled:
             line = PREFIX + json.dumps(self.result, ensure_ascii=False) + "\n"
             os.write(2, encoded(line))

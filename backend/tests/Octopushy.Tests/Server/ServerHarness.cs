@@ -610,9 +610,9 @@ public sealed class FakeAgent(ServerHarness harness, Guid id, AgentSession sessi
 
     /// <summary>
     /// Keys whose names are the user's and not the contract's: an apply's module outputs, what a prepare playbook resolved,
-    /// and the manifest the controller sent.
+    /// the manifest the controller sent, and what a playbook reported.
     /// </summary>
-    private static readonly string[] UserKeys = ["outputs", "prepared", "manifest"];
+    private static readonly string[] UserKeys = ["outputs", "prepared", "manifest", "reports"];
 
     /// <summary>
     /// Fields executors.md names that no example holds yet; see contracts/agent/v1/examples/README.md. A test may report

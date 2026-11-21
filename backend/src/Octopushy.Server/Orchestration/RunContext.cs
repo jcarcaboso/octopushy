@@ -283,7 +283,21 @@ public sealed record AnsibleContext(
     IReadOnlyList<string> SecretFiles,
     Dictionary<string, AnsibleOutcome> Outcomes,
     /// <summary>What changed under the workflow and its project since the guest's last successful run; null when it has none.</summary>
-    IReadOnlyList<string>? ChangedFiles);
+    IReadOnlyList<string>? ChangedFiles)
+{
+    /// <summary>
+    /// The values its playbooks may report, by name, with the pattern each has to match whole: the workflow's <c>reports</c> when
+    /// the run was made. Null in a run made before reports, or of a workflow that declares none.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Reports { get; init; }
+
+    /// <summary>
+    /// What the guest's peers had reported when the run was made, as its playbooks get it in <c>octopushy.peers</c>: see
+    /// <see cref="GuestReports.PeersAsync"/>. Fixed here so the approved document names exactly what the playbook gets. Null
+    /// when the workflow names no peers.
+    /// </summary>
+    public JsonObject? Peers { get; init; }
+}
 
 /// <summary>
 /// A verify attempt that was asked to read a container's host keys from the creation by run <paramref name="CreatedBy"/>.

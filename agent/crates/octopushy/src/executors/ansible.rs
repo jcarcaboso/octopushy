@@ -49,6 +49,8 @@ const RECAP_PREFIX: &str = "octopushy-recap: ";
 const NEVER_STARTED: &[i32] = &[78, 125, 126, 127];
 /// The longest name or detail kept, after it is masked: cutting first would keep part of a secret.
 const MAX_REPORTED: usize = 1024;
+/// As many reported values as `octopushy_recap` passes on.
+const MAX_REPORTS: usize = 8;
 
 /// What ssh says when it never got as far as running anything on the guest.
 const NEVER_CONNECTED: &[&str] = &[
@@ -151,6 +153,8 @@ struct Recap {
     unreachable_task: Option<String>,
     outcome: Option<String>,
     detail: Option<String>,
+    /// What the playbook reported with `octopushy_reports`, as short texts; see [`kept_reports`].
+    reports: Option<Map<String, Value>>,
     /// Whether ssh said sshd took the key, read before `unreachable` is cut to size.
     #[serde(skip)]
     key_taken: bool,
@@ -1079,12 +1083,31 @@ fn read_recap(out: &ToolOutput, ctx: &ExecContext) -> Option<Recap> {
     {
         *value = ctx.log.mask(value).chars().take(MAX_REPORTED).collect();
     }
+    recap.reports = recap
+        .reports
+        .take()
+        .map(|reports| kept_reports(reports, |text| ctx.log.mask(text)));
     if let Some(value) = &mut recap.unreachable {
         let masked = ctx.log.mask(value);
         let skip = masked.chars().count().saturating_sub(MAX_REPORTED);
         *value = masked.chars().skip(skip).collect();
     }
     Some(recap)
+}
+
+/// The reported values that are texts and hold nothing masking would hide. A value is a
+/// fingerprint or a state for the controller to keep and give to peers, so one that holds a
+/// secret is left out whole rather than kept with the secret masked.
+fn kept_reports(reports: Map<String, Value>, mask: impl Fn(&str) -> String) -> Map<String, Value> {
+    reports
+        .into_iter()
+        .filter(|(name, value)| {
+            value
+                .as_str()
+                .is_some_and(|text| mask(text) == text && mask(name) == *name)
+        })
+        .take(MAX_REPORTS)
+        .collect()
 }
 
 /// Whether ssh failed before anything ran on the guest.
@@ -1123,10 +1146,10 @@ fn settle(prep: &Prepared, out: &ToolOutput, recap: Option<Recap>, minutes: u64)
         let mut result = outputs(out, &recap);
         result["outcome"] = json!(outcome);
         result["detail"] = json!(recap.detail);
-        return Ok(Success::outputs(result));
+        return Ok(Success::outputs(with_reports(result, &recap)));
     }
     if out.code == Some(0) {
-        return Ok(Success::outputs(outputs(out, &recap)));
+        return Ok(Success::outputs(with_reports(outputs(out, &recap), &recap)));
     }
     Err(Failure::with_outputs(
         match recap.failed_task.as_deref() {
@@ -1154,6 +1177,15 @@ fn finished(out: &ToolOutput, recap: Option<Recap>, minutes: u64) -> Result<Reca
         )));
     };
     Ok(recap)
+}
+
+/// A run that ended as its playbook meant carries what it reported. A failed or uncertain run
+/// carries none: nothing shows the playbook got as far as what it reported.
+fn with_reports(mut result: Value, recap: &Recap) -> Value {
+    if let Some(reports) = recap.reports.as_ref().filter(|r| !r.is_empty()) {
+        result["reports"] = Value::Object(reports.clone());
+    }
+    result
 }
 
 fn outputs(out: &ToolOutput, recap: &Recap) -> Value {
@@ -1454,6 +1486,45 @@ mod tests {
         assert_eq!(relative("./a/b", "x").unwrap(), PathBuf::from("a/b"));
         assert!(relative("../a", "x").is_err());
         assert!(relative("/a", "x").is_err());
+    }
+
+    #[test]
+    fn only_texts_that_hold_nothing_masked_are_reported() {
+        let reports = json!({
+            "certificate_sha256": "ab".repeat(32),
+            "role": "primary",
+            "number": 5,
+            "secret": "the s3cret value",
+            "s3cret": "named after it",
+        });
+        let Value::Object(reports) = reports else {
+            unreachable!()
+        };
+        let kept = kept_reports(reports, |text| text.replace("s3cret", "***"));
+        assert_eq!(
+            Value::Object(kept),
+            json!({ "certificate_sha256": "ab".repeat(32), "role": "primary" })
+        );
+    }
+
+    #[test]
+    fn only_a_run_that_ended_as_meant_carries_reports() {
+        let recap = Recap {
+            reports: Some(
+                json!({ "role": "primary" })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+            ..Recap::default()
+        };
+        let result = with_reports(json!({ "exitCode": 0 }), &recap);
+        assert_eq!(result["reports"], json!({ "role": "primary" }));
+        let empty = Recap {
+            reports: Some(Map::new()),
+            ..Recap::default()
+        };
+        assert!(with_reports(json!({}), &empty).get("reports").is_none());
     }
 
     #[test]

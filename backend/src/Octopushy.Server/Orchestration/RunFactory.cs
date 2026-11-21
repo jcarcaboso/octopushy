@@ -140,7 +140,8 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
     /// trust in that installation still decides whether its guests are worked on.
     /// </summary>
     public Run Configure(LabRepository repository, GuestDefinition guest, Resource resource, DefinitionRevision revision,
-        string actionId, string reason, GuestConfiguration? configuration, IReadOnlyList<string>? changedFiles, DateTimeOffset? scheduledFor = null)
+        string actionId, string reason, GuestConfiguration? configuration, IReadOnlyList<string>? changedFiles, DateTimeOffset? scheduledFor = null,
+        JsonObject? peers = null)
     {
         if (guest.Retired)
             throw new RunException("A retired guest is not configured.");
@@ -217,7 +218,12 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
                 inputs.SecretFiles.Keys.ToList(),
                 inputs.Configure.Outcomes.ToDictionary(
                     o => o.Key, o => new AnsibleOutcome(o.Value.Description, o.Value.ApproveVars, o.Value.Result, o.Value.Promote), StringComparer.Ordinal),
-                changedFiles),
+                changedFiles)
+            {
+                Reports = inputs.Workflow.Reports.Count == 0 ? null
+                    : inputs.Workflow.Reports.ToDictionary(r => r.Key, r => r.Value.Pattern, StringComparer.Ordinal),
+                Peers = inputs.Workflow.Peers is null ? null : peers?.DeepClone().AsObject() ?? [],
+            },
         };
 
         var run = NewRun(resource, Operations.Configure, revision, reason, context);

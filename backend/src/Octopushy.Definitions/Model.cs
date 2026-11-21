@@ -248,6 +248,24 @@ public sealed record ServiceName(string Name, string Stage, string Url)
     /// </summary>
     public static IEnumerable<string> Read(JsonNode root, string path)
     {
+        foreach (var text in InputPath.Strings(root, path))
+        {
+            var name = text.TrimEnd('.').ToLowerInvariant();
+            if (name.Contains('.') && Uri.CheckHostName(name) == UriHostNameType.Dns)
+                yield return name;
+        }
+    }
+}
+
+/// <summary>A path into a definition's <c>{ inputs }</c>, as a workflow writes one: <c>inputs.dns_records[].name</c>.</summary>
+public static class InputPath
+{
+    /// <summary>
+    /// The texts at <paramref name="path"/> in <paramref name="root"/>: dotted property names, where <c>[]</c> after one goes
+    /// through each item of its array. Anything missing or not a text is skipped.
+    /// </summary>
+    public static IEnumerable<string> Strings(JsonNode root, string path)
+    {
         IEnumerable<JsonNode?> nodes = [root];
         foreach (var segment in path.Split('.'))
         {
@@ -260,11 +278,8 @@ public sealed record ServiceName(string Name, string Stage, string Url)
 
         foreach (var node in nodes)
         {
-            if (node is not JsonValue value || !value.TryGetValue<string>(out var text))
-                continue;
-            var name = text.TrimEnd('.').ToLowerInvariant();
-            if (name.Contains('.') && Uri.CheckHostName(name) == UriHostNameType.Dns)
-                yield return name;
+            if (node is JsonValue value && value.TryGetValue<string>(out var text))
+                yield return text;
         }
     }
 }

@@ -139,6 +139,48 @@ public sealed record WorkflowDefinition(
 
     /// <summary>Every directory a stage of the workflow runs from.</summary>
     public IEnumerable<string> Roots => Stages.Select(s => s.Root).Distinct(StringComparer.Ordinal);
+
+    /// <summary>
+    /// For <c>manages: vm</c> or <c>container</c> with a setup stage: the values a playbook of that stage may hand back with
+    /// <c>set_stats</c> as <c>octopushy_reports</c>, by name. Octopushy keeps the latest of each per guest, from a run that
+    /// reached the guest over its pinned host key, and gives them to the guest's peers. See docs/workflows.md#reports-and-peers.
+    /// </summary>
+    public IReadOnlyDictionary<string, WorkflowReport> Reports { get; init; } = new Dictionary<string, WorkflowReport>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// For <c>manages: vm</c> or <c>container</c> with a setup stage: the guests whose reports this guest's runs get, as a path
+    /// into <c>{ inputs }</c> such as <c>inputs.technitium_members[].name</c>. Each value names a guest of the same lab by id.
+    /// </summary>
+    public string? Peers { get; init; }
+}
+
+/// <summary>A value a playbook may report, and the pattern the whole of it has to match before Octopushy keeps it.</summary>
+public sealed record WorkflowReport(string Name, string? Description, string Pattern)
+{
+    /// <summary>The longest value kept, in characters. A report is a fingerprint or a state, never a document.</summary>
+    public const int MaxLength = 256;
+
+    /// <summary>How long a pattern may take on one value, which a repository wrote.</summary>
+    public static readonly TimeSpan MatchTimeout = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>Whether <paramref name="value"/> is one this report may hold: short enough, and matched whole by its pattern.</summary>
+    public bool Accepts(string value)
+    {
+        if (value.Length is 0 or > MaxLength)
+            return false;
+        try
+        {
+            return Whole(Pattern).IsMatch(value);
+        }
+        catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>The pattern as it is matched: against the whole value. Validation builds this same one, so what passes it matches.</summary>
+    public static System.Text.RegularExpressions.Regex Whole(string pattern) =>
+        new($@"\A(?:{pattern})\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant, MatchTimeout);
 }
 
 /// <summary>

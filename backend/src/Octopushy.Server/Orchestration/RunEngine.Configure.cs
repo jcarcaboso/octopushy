@@ -146,6 +146,16 @@ public sealed partial class RunEngine
     private async Task ApplyConfigureEffectsAsync(OctopushyDb db, Run run, Step step, CancellationToken cancellationToken)
     {
         var context = RunContext.Parse(run.Context).Ansible!;
+        // Whatever the outcome: the playbook ended as it meant to, over this guest's pinned host key, so what it reported is
+        // this guest's. Only the guest's own configure runs report; a rotation's playbooks are the server's.
+        if (run.Operation == Operations.Configure && context.Reports is not null && step.Outputs is { } stepOutputs
+            && await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == run.ResourceId, cancellationToken) is { } reportsTo)
+        {
+            var refused = GuestReports.Record(reportsTo, context, JsonNode.Parse(stepOutputs), run.Id, clock.GetUtcNow());
+            if (refused.Count > 0)
+                step.Detail = $"Not kept, since the workflow does not declare it or it does not match its pattern: {string.Join(", ", refused)}.";
+        }
+
         var reported = OutcomeOf(run);
         var approvable = reported?.Declared.ApproveVars is not null;
         var scheduled = approvable && run.Reason == RunReasons.Schedule;
@@ -321,6 +331,10 @@ public sealed partial class RunEngine
             return;
         var configuration = await db.GuestConfigurations.FirstOrDefaultAsync(c => c.ResourceId == run.ResourceId, cancellationToken);
         if (configuration is not null)
+        {
             configuration.ProposedHash = null;
+            // What it reported was of a machine that may be gone: its peers get nothing of it until its setup reports again.
+            configuration.Reports = null;
+        }
     }
 }

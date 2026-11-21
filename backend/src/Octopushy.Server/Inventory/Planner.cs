@@ -257,6 +257,27 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
                 runs.Add(run);
             }
 
+            // A new report of a peer is a change too, and gets one run the same way. A run started above already gets it.
+            foreach (var (configuration, resource, guest, _) in followed)
+            {
+                if (guest.Workflow?.Peers is null || guest.Setup!.Configure?.OnChange is not { } onChange || runs.Any(r => r.ResourceId == resource.Id))
+                    continue;
+                var peers = await GuestReports.PeersAsync(db, repository, guest, cancellationToken);
+                var changes = GuestReports.Changes(configuration.PeerReports, peers);
+                if (configuration.PeerReports is null)
+                {
+                    // Recorded once, from what the peers report now: the first record starts no run.
+                    configuration.PeerReports = peers?.ToJsonString();
+                    continue;
+                }
+
+                if (changes.Count == 0)
+                    continue;
+                var run = await ConfigureRunAsync(db, repository, guest, resource, revision, onChange.Id, RunReasons.Peer, cancellationToken);
+                run.ReasonDetail = $"New from {string.Join(", ", changes)}.";
+                runs.Add(run);
+            }
+
             await engine.AddRunsAsync(db, runs, cancellationToken);
             return runs.Count;
         }, cancellationToken);
@@ -388,7 +409,12 @@ public sealed partial class Planner(RunEngine engine, RunFactory factory, Revisi
             ? await db.Revisions.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, cancellationToken)
             : null;
         var changed = applied is null ? null : await ChangedSinceAsync(applied, revision, guest, cancellationToken);
-        return factory.Configure(repository, guest, resource, revision, action, reason, configuration, changed, scheduledFor);
+        var peers = await GuestReports.PeersAsync(db, repository, guest, cancellationToken);
+        var run = factory.Configure(repository, guest, resource, revision, action, reason, configuration, changed, scheduledFor, peers);
+        // However it is started, a run of the onChange action delivers what the peers reported now, so that is not owed another run.
+        if (peers is not null && configuration is not null && action == guest.Setup?.Configure?.OnChange?.Id)
+            configuration.PeerReports = peers.ToJsonString();
+        return run;
     }
 
     /// <summary>

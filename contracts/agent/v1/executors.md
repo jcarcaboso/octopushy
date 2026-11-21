@@ -622,7 +622,7 @@ The controller records the artifact's SHA-256 as `planSha256`, which the approva
 
 ### `run`
 
-Examples: [input](examples/ansible/run.input.json), [output](examples/ansible/run.output.json), [with an outcome](examples/ansible/run.output.outcome.json).
+Examples: [input](examples/ansible/run.input.json), [output](examples/ansible/run.output.json), [with an outcome](examples/ansible/run.output.outcome.json), [with reports](examples/ansible/run.output.reports.json).
 
 **Mutating and not normally cancellable.** The assignment carries `preview.json`, whose SHA-256 is
 checked, and the secrets `ansible.ssh-key`, `ansible.var.<name>` and `ansible.file.<name>`. They
@@ -646,6 +646,7 @@ from the log, parses it as written, then masks its text and cuts it to 1024 char
 |---|---|
 | Exit 0 | `succeeded` |
 | `set_stats` set a declared `octopushy_outcome`, and no task was unreachable | `succeeded`, with `outcome` and `detail` |
+| Either of the two above, and `set_stats` set `octopushy_reports` | as above, with `reports` |
 | `octopushy_outcome` is not declared | `failed`, without repeating it |
 | A task failed, and the recap was written | `failed`, naming the task |
 | Exit 78, 125, 126 or 127 with no recap: the tool never ran | `failed` |
@@ -653,6 +654,19 @@ from the log, parses it as written, then masks its text and cuts it to 1024 char
 | The guest was lost after that, even after an outcome or in a task the play ignored | `uncertain` |
 | Killed, or ended any other way without a recap | `uncertain` |
 | Past `timeoutMinutes`, which is stopped with SIGTERM | `uncertain` |
+
+`reports` is what the playbook set as `octopushy_reports`: a mapping of names to texts, such as a
+certificate's fingerprint, which the controller keeps for the guest and gives to its peers. The
+callback keeps at most 8, each name at most 64 bytes and each value at most 256 bytes as JSON
+writes them, and leaves out whatever is not a text, whole. The agent then leaves out every entry
+that masking would change, so a value holding a secret is never reported, and reports none from a
+run that failed or is uncertain. The controller keeps only names the workflow declares under
+`reports`, whose pattern matches the whole value.
+
+The input's `context`, the `octopushy` var, carries `peers` when the guest's workflow names peers:
+by guest id, the `address` its setup connects to, and the `reports` it made over a connection to
+that address. It is fixed when the run is made and is in the preview's `manifest`, so the approval
+covers it.
 
 An attempt interrupted by an agent restart is `uncertain` once the playbook has started, as
 for other mutating actions, and `failed` before, as during the image pull. A run the controller

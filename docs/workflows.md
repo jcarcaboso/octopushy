@@ -234,6 +234,8 @@ For `manages: vm`, and `manages: container` alike:
   it means: a new release of a workflow, which a guest picks up within its major, can make an action run without a
   person on a guest under manual approval, and nothing in the lab repository shows it except the guest's page.
 - **`secrets` and `outcomes`** need the Ansible stage. A workflow without one has neither.
+- **What approving an outcome sets is the approver's.** A guest whose `inputs`, `secrets` or `secretFiles` name a var
+  that one of its workflow's outcomes sets on approval is invalid, so no guest can skip that person.
 
 ### A workflow that manages a container
 
@@ -954,7 +956,7 @@ like any other.
 
 Every plan is made before anything applies, so a stage uses repository inputs only. There are no stage outputs. A value one
 stage produces and another needs belongs in the repository, or on the machine for a later stage's playbook to read when it
-runs.
+runs. The one exception is between guests, not stages: a guest's setup can [report values to its peers](#reports-and-peers).
 
 ### Readiness and turns
 
@@ -1177,6 +1179,54 @@ stages:
 - **Names follow the head revision, as links do, and change nothing a run does.** A name is checked from the commit
   that adds it, so it reads as down until the stage has set it. The inputs it is read from are part of the hash already.
 - `names` is allowed on any stage of `manages: service`, and refused on any other workflow.
+
+## Reports and peers
+
+Some guests have to know a value another guest makes, such as the certificate fingerprint each member of a DNS cluster pins
+for the others. A person used to read it from one guest's run log and commit it to every other guest's `guest.yaml`. Instead,
+a workflow of `manages: vm` or `container` with a setup stage can declare what its setup reports, and whose reports a guest
+gets. [ADR 0010](adr/0010-guests-report-to-their-peers.md) records why.
+
+```yaml
+reports:
+  certificate_sha256: { pattern: "[0-9a-f]{64}", description: The node's own TLS certificate }
+  cluster_role: { pattern: standalone|primary|secondary }
+peers: inputs.technitium_members[].name     # each value names a guest of the same lab, by id
+```
+
+A playbook of the setup stage reports with `set_stats`:
+
+```yaml
+- ansible.builtin.set_stats:
+    data: { octopushy_reports: { certificate_sha256: "{{ fingerprint }}" } }
+    aggregate: true    # two tasks reporting different names both count
+    per_host: false
+```
+
+- **What is kept.** Octopushy keeps a value only from a playbook step of the guest's own configure run, of any action, whose
+  playbook ended as it meant to. That includes a declared outcome. The step reached the guest over its pinned host key, so the
+  value is as trustworthy as that pin. A failed or uncertain run keeps nothing. The workflow has to declare the name, and the
+  whole value has to match its pattern. A value is at most 256 characters, a guest's setup reports at most 8, and the agent
+  drops any value that holds a secret. A new value of a name replaces the old one. The step's detail names anything that was
+  not kept.
+- **What a peer gets.** Every playbook of a guest whose workflow names `peers` gets `octopushy.peers`. It is keyed by peer id
+  and holds the `address` the peer's setup connects to and the `reports` it made over a connection to that address. A
+  report made at an address the peer no longer has is left out. So are names this guest's workflow does not declare.
+- **Who is a peer.** A guest of the same lab, valid and not retired, whose id a value at the `peers` path names, and whose
+  workflow has the same id as the guest's. A guest is never its own peer. A name that matches no such guest is left out, so
+  a playbook has to treat a missing peer as unknown.
+- **The approval covers it.** The value of `octopushy.peers` is fixed when the run is made and goes into the manifest of the
+  preview a person approves. The playbook gets exactly what was approved.
+- **A new report is a change.** When what a guest's peers report differs from what its last setup got, its setup is
+  proposed once with the reason `peer`, the same way a [followed store value](#hashes) proposes it. The guest's policy
+  applies as for any setup run. Values that do not move propose nothing more, so two guests that report to each other
+  settle. The first time a guest's peers are recorded, no run starts.
+- **A new machine reports again.** A provision run that creates or replaces a guest's machine forgets what that guest
+  reported, so its peers get nothing from it until its setup runs again.
+
+Octopushy still knows nothing of what a value means. It does not order work between guests. A playbook decides from what it
+gets, for example to form a cluster only once every member's certificate is known. Reports are not inputs: they are not in
+the guest's configure hash and are not shown as definitions.
 
 ## Later
 
