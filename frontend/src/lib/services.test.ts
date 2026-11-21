@@ -120,3 +120,41 @@ it("filters by service, guest or host and drops empty groups", () => {
   expect(filterGroups(groups, "10.0.0")[0].links).toHaveLength(1);
   expect(filterGroups(groups, "nothing")).toEqual([]);
 });
+
+it("keeps groups with the same name separate from one another and from domains", () => {
+  const groups = groupsOf([
+    service("app", ["https://app.home.example.org/", "https://app.other.example.org:8443/status"], {
+      group: { id: "apps", name: "home.example.org" },
+    }),
+    service("dns", ["http://10.0.0.21/"], { group: { id: "dns", name: "home.example.org" } }),
+    service("vault", ["https://vault.home.example.org/"]),
+  ]);
+  expect(groups.map((g) => g.label)).toEqual(Array(3).fill("home.example.org"));
+  expect(new Set(groups.map((g) => g.key)).size).toBe(3);
+  const configured = groups.find((g) => g.key === "group:apps")!;
+  const inferred = groups.find((g) => g.domain === "home.example.org")!;
+  expect(configured.links.map((l) => [l.label, l.tail, l.path])).toEqual([
+    ["app.home.example.org", "", ""], ["app.other.example.org:8443", "", "/status"],
+  ]);
+  expect(inferred.links.map((l) => l.service.name)).toEqual(["vault"]);
+});
+
+it("uses the last named member by address, even when it has no link", () => {
+  const id = "home-assistant";
+  const guests = [
+    guest("automation", [service("zigbee", ["http://10.0.0.21/"], { group: { id, name: "Bridge" } })]),
+    guest("controller", [service("app", [], { group: { id, name: "Home Assistant" } })]),
+    guest("data", [service("database", ["tcp://10.0.0.22:5432"], { group: { id, name: null } })]),
+  ];
+  for (const order of [guests, [...guests].reverse()]) {
+    const [group] = groupLinks(buildTree(inventoryOf(order), undefined));
+    expect(group.label).toBe("Home Assistant");
+    expect(group.links.map((l) => l.service.name)).toEqual(["database", "zigbee"]);
+  }
+});
+
+it("uses the ID when no member supplies a name", () => {
+  const group = { id: "home-assistant", name: null };
+  const [section] = groupsOf([service("bridge", ["http://10.0.0.21/"], { group })]);
+  expect(section.label).toBe(group.id);
+});

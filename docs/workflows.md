@@ -599,7 +599,7 @@ is not hashed, only what it resolved to, so `@2` and `@2.3` resolving to the sam
 - **Configure:** the guest's inputs, secrets, secret files and access; the workflow; the setup stage's root; and the guest's
   own files outside `guest.yaml` and `services/`. Hardware and network are not part of it, and neither is a schedule, which
   says when an action runs, not what it does.
-- **Service:** `service.yaml` without its description, links, policy and execution; the service's own files; how its guest is
+- **Service:** `service.yaml` without its description, group, links, policy and execution; the service's own files; how its guest is
   reached; the workflow; the roots of all its stages; and, when a stage fills an interface slot, the binding its
   installation names, without its description. A service with no such stage has the hash it had before interfaces.
 
@@ -812,6 +812,7 @@ not applied otherwise yet.
 # labs/home/proxmox/korriban/guests/krb-app-01/services/web/service.yaml
 schemaVersion: 1
 workflow: web@1                   # a workflow with manages: service
+group: { id: example-apps, name: Example apps }
 links: ["https://web.home.example.org/"]   # where people open it: shown and checked, never run
 inputs: { port: 8000 }            # given to every stage
 secrets:
@@ -820,10 +821,13 @@ policy: { approval: manual }
 ```
 
 Each service folder is one deployment instance, such as `home/korriban/krb-app-01/web`, with its own status, approval, and
-failure domain. Octopushy holds nothing about what it is: ports, DNS, routes and verification are stages of its workflow, and
-what they mean is the workflow's. The one exception is `links`: where people open it, which the Inventory shows and an agent
-checks for [uptime](uptime.md). They are not part of the service's hash, so changing them runs nothing. The host names a
-stage sets, such as its DNS records, are opened and checked the same way when the workflow declares them: see
+failure domain. The workflow defines ports, DNS, routes and verification. The Inventory shows `links`, which an agent checks
+for [uptime](uptime.md). On the Services page, services with the same `group.id` share a section, even across guests and
+domains. Set `group: { id: home-assistant }` in each related `service.yaml` and add `name: Home Assistant` inside `group`
+in just one of them. If several services set `group.name`, the last one by alphabetical service address wins. If none set
+a name, the heading uses the ID. Services without a group still appear under their link domains or under "No domain".
+Changing `group` or `links` does not trigger a run. The host names a stage sets, such as its DNS records, are opened and
+checked the same way when the workflow declares them: see
 [names a stage sets](#names-a-stage-sets). `secrets` and `secretFiles` reach only the workflow's Ansible stages, so a workflow with
 none refuses them.
 

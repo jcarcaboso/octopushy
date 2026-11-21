@@ -654,20 +654,27 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             .Select(i => new StoredIcon(i.ResourceId, i.Name, i.ContentType != null, i.SetAt))
             .ToDictionaryAsync(i => i.ResourceId, cancellationToken);
 
-    /// <param name="definition">The service as the head revision reads it, for the names its stages set; null shows only its links.</param>
+    /// <param name="definition">The service as the head revision reads it, for the names its stages set; null uses stored metadata.</param>
     private ServiceSummaryDto ServiceSummary(Resource resource, Run? active, Run? last, GuestConfiguration? state, string? waiting,
         ServiceDefinition? definition, StoredIcon? icon)
     {
         var (status, detail) = ServiceStatus(resource, active, last, state, waiting);
         var name = resource.Address.Split('/')[^1];
+        var json = definition?.Json ?? (resource.Definition is null ? null : JsonNode.Parse(resource.Definition));
         return new ServiceSummaryDto(resource.Id, resource.Address, name, status, detail, resource.Valid,
             active is null ? null : Summary(active, resource.Address, resource.Kind),
             last is null ? null : Summary(last, resource.Address, resource.Kind),
             Workflow(resource),
-            definition?.Links ?? ServiceDefinition.LinksOf(resource.Definition is null ? null : JsonNode.Parse(resource.Definition)),
+            ServiceGroup(json?["group"]),
+            definition?.Links ?? ServiceDefinition.LinksOf(json),
             definition?.Names.Select(n => new ServiceNameDto(n.Name, n.Stage, n.Url)).ToList() ?? [],
             icons.Resolve(resource.Id, name, icon));
     }
+
+    private static ServiceGroupDto? ServiceGroup(JsonNode? node) =>
+        node is JsonObject group && group["id"] is JsonValue id && id.TryGetValue<string>(out var key)
+            ? new ServiceGroupDto(key, group["name"] is JsonValue name && name.TryGetValue<string>(out var text) ? text : null)
+            : null;
 
     /// <summary>What a guest or service names in its definition, and what the latest revision resolved that to.</summary>
     private static WorkflowDto? Workflow(Resource resource) =>

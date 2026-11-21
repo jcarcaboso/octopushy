@@ -489,6 +489,8 @@ public sealed record ServiceSummaryDto(
     RunSummaryDto? ActiveRun,
     RunSummaryDto? LastRun,
     WorkflowDto? Workflow,
+    /// <summary>The group in <c>service.yaml</c>; null lets the Services page group links by domain.</summary>
+    ServiceGroupDto? Group,
     /// <summary>
     /// Where people open the service and what uptime checks: <c>links</c> in <c>service.yaml</c>, then the URL of each of
     /// <see cref="Names"/> that no link already opens.
@@ -498,6 +500,9 @@ public sealed record ServiceSummaryDto(
     IReadOnlyList<ServiceNameDto> Names,
     /// <summary>The icon the Services page shows for the service; null when it has none. See docs/service-icons.md.</summary>
     ServiceIconDto? Icon);
+
+/// <summary>The shared group ID and the display name this service supplies, if any.</summary>
+public sealed record ServiceGroupDto(string Id, string? Name);
 
 /// <summary>A host name a service's stage sets, and the URL it is opened and checked at.</summary>
 public sealed record ServiceNameDto(string Name, string Stage, string Url);

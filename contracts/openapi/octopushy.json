@@ -10606,6 +10606,24 @@
           }
         }
       },
+      "ServiceGroupDto": {
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "ServiceIconChoice": {
         "required": [
           "name"
@@ -10677,6 +10695,7 @@
           "activeRun",
           "lastRun",
           "workflow",
+          "group",
           "links",
           "names",
           "icon"
@@ -10732,6 +10751,16 @@
               },
               {
                 "$ref": "#/components/schemas/WorkflowDto"
+              }
+            ]
+          },
+          "group": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ServiceGroupDto"
               }
             ]
           },

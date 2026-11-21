@@ -257,13 +257,13 @@ const guestAddressOf = (id: string) => {
 function serviceSummary(): ServiceSummary {
   const { activeRun, lastRun, status: state, statusDetail } = status(resources.app.id);
   return { id: resources.app.id, address: resources.app.address, name: "app", status: state, statusDetail, valid: true, activeRun, lastRun,
-    workflow: { reference: "web@1", resolved: "web@1.2" }, links: appLinks, names: [], icon: iconOf(resources.app.id, "app") };
+    workflow: { reference: "web@1", resolved: "web@1.2" }, group: null, links: appLinks, names: [], icon: iconOf(resources.app.id, "app") };
 }
 
 function otherSummary(s: (typeof otherServices)[number]): ServiceSummary {
   const { activeRun, lastRun, status: state, statusDetail } = status(s.id);
   return { id: s.id, address: `${guestAddressOf(s.guest)}/${s.name}`, name: s.name, status: state, statusDetail, valid: true,
-    activeRun, lastRun, workflow: { reference: s.workflow, resolved: `${s.workflow}.0` }, links: s.links, names: s.names ?? [], icon: iconOf(s.id, s.name) };
+    activeRun, lastRun, workflow: { reference: s.workflow, resolved: `${s.workflow}.0` }, group: null, links: s.links, names: s.names ?? [], icon: iconOf(s.id, s.name) };
 }
 
 function servicesOf(guestId: string): ServiceSummary[] {

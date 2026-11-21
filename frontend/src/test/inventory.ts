@@ -4,7 +4,7 @@ import type { GuestSummary, Inventory, ServiceSummary, UptimeCheck } from "../ap
 
 export const service = (name: string, links: string[], extra: Partial<ServiceSummary> = {}): ServiceSummary => ({
   id: `svc-${name}`, address: `home/pve01/web/${name}`, name, status: "in-sync", statusDetail: null, valid: true, activeRun: null, lastRun: null,
-  workflow: null, links, names: [], icon: null, ...extra,
+  workflow: null, group: null, links, names: [], icon: null, ...extra,
 });
 
 export const guest = (name: string, services: ServiceSummary[]): GuestSummary => ({

@@ -18,8 +18,10 @@ export interface ServiceLink {
   check: UptimeCheck | null;
 }
 
-/** The links under one domain; `domain` is null for addresses and single-label hosts. */
+/** A configured section, a domain, or the "No domain" fallback. */
 export interface LinkGroup {
+  key: string;
+  label: string | null;
   domain: string | null;
   links: ServiceLink[];
 }
@@ -31,17 +33,25 @@ function hasDomain(hostname: string): boolean {
   return hostname.includes(".") && !hostname.startsWith("[") && !/^[\d.]+$/.test(hostname);
 }
 
-/** Every link of every service that is not retired, grouped by the domain its host is under. */
+/** Every link of every service that is not retired, grouped by configured ID or domain. */
 export function groupLinks(nodes: NodeEntry[]): LinkGroup[] {
   const parsed: { url: URL | null; link: string; service: ServiceSummary; guest: GuestSummary; check: UptimeCheck | null }[] = [];
+  const groupNames = new Map<string, { name: string; address: string }>();
   for (const machine of nodes.flatMap((n) => n.machines)) {
     for (const entry of machine.services) {
-      if (entry.service.status === "retired") continue;
-      for (const link of entry.service.links) {
+      const { service } = entry;
+      if (service.status === "retired") continue;
+      const { group, address } = service;
+      if (group?.name) {
+        // Last named member by service address, even if it has no links.
+        const previous = groupNames.get(group.id);
+        if (!previous || previous.address < address) groupNames.set(group.id, { name: group.name, address });
+      }
+      for (const link of service.links) {
         parsed.push({
           url: URL.canParse(link) ? new URL(link) : null,
           link,
-          service: entry.service,
+          service,
           guest: machine.guest,
           check: entry.checks.find((c) => c.url === link) ?? null,
         });
@@ -49,7 +59,7 @@ export function groupLinks(nodes: NodeEntry[]): LinkGroup[] {
     }
   }
 
-  // The services with a link right under each domain.
+  // Count all services under each domain so a configured group doesn't move other services.
   const direct = new Map<string, Set<string>>();
   for (const { url, service } of parsed) {
     if (!url || !hasDomain(url.hostname)) continue;
@@ -70,9 +80,11 @@ export function groupLinks(nodes: NodeEntry[]): LinkGroup[] {
     return p;
   };
 
-  const groups = new Map<string | null, ServiceLink[]>();
+  const groups = new Map<string, LinkGroup>();
   for (const { url, link, service, guest, check } of parsed) {
-    const domain = url && hasDomain(url.hostname) ? groupOf(url.hostname) : null;
+    const groupId = service.group?.id;
+    const domain = !groupId && url && hasDomain(url.hostname) ? groupOf(url.hostname) : null;
+    const key = groupId ? `group:${groupId}` : `domain:${domain ?? ""}`;
     const host = url?.host ?? link;
     const port = url?.port ? `:${url.port}` : "";
     const apex = domain === url?.hostname;
@@ -88,22 +100,26 @@ export function groupLinks(nodes: NodeEntry[]): LinkGroup[] {
       guest,
       check,
     };
-    groups.set(domain, [...(groups.get(domain) ?? []), entry]);
+    const group = groups.get(key) ?? { key, label: groupId ? groupNames.get(groupId)?.name ?? groupId : domain, domain, links: [] };
+    group.links.push(entry);
+    groups.set(key, group);
   }
 
   // Services by name, then guest; a service's links keep their order, since the sort is stable.
   const order = (a: ServiceLink, b: ServiceLink) =>
     a.service.name.localeCompare(b.service.name) || a.guest.address.localeCompare(b.guest.address) || a.service.id.localeCompare(b.service.id);
-  return [...groups]
-    .map(([domain, links]) => ({ domain, links: links.sort(order) }))
-    .sort((a, b) => (a.domain === null ? 1 : b.domain === null ? -1 : a.domain.localeCompare(b.domain)));
+  for (const group of groups.values()) group.links.sort(order);
+  return [...groups.values()].sort((a, b) =>
+    a.label === b.label ? 0 : a.label === null ? 1 : b.label === null ? -1 : a.label.localeCompare(b.label));
 }
 
-/** The groups with only the links whose service, guest or host contains the text; empty groups go. */
+/** Match the section name or individual links by service, guest or host. */
 export function filterGroups(groups: LinkGroup[], text: string): LinkGroup[] {
   const q = text.trim().toLowerCase();
   if (!q) return groups;
   return groups
-    .map((g) => ({ ...g, links: g.links.filter((l) => [l.service.name, l.guest.name, l.host].some((v) => v.toLowerCase().includes(q))) }))
+    .map((g) => g.label?.toLowerCase().includes(q) ? g : ({
+      ...g, links: g.links.filter((l) => [l.service.name, l.guest.name, l.host].some((v) => v.toLowerCase().includes(q))),
+    }))
     .filter((g) => g.links.length > 0);
 }
