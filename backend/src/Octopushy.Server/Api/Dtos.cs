@@ -296,8 +296,13 @@ public sealed record GuestSummaryDto(
     string? AccessAddress,
     /// <summary>The services the repository shows on the guest.</summary>
     IReadOnlyList<ServiceSummaryDto> Services,
+    /// <summary>Pages people open for the guest, from <c>links</c> in its definition, such as its own admin console.</summary>
+    IReadOnlyList<GuestLinkDto> Links,
     /// <summary>Where the guest's own machine is not where Octopushy expects it, by the latest observation; null when it is, or cannot be told.</summary>
     MachineDriftDto? Drift = null);
+
+/// <summary>A page people open for a guest: an http or https URL and what to call it.</summary>
+public sealed record GuestLinkDto(string Label, string Url);
 
 /// <summary>
 /// The guest's own machine as the installation's latest complete observation shows it, when that is not what the guest

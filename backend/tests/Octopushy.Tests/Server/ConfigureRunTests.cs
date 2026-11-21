@@ -152,6 +152,38 @@ public class ConfigureRunTests(PostgresFixture postgres) : IClassFixture<Postgre
     }
 
     [Fact]
+    public async Task Links_added_to_a_guest_are_shown_and_start_no_run()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());
+        var (_, agent, http) = await ProvisionedAsync(server);
+        using var _ = http;
+        await ScheduleAsync(server);
+        await PreviewAsync(agent);
+        await agent.ReportAsync(await agent.NextAsync("run"), Outcome.Succeeded, Recap());
+        await server.TickAsync();
+        var runs = await server.QueryAsync(db => db.Runs.CountAsync());
+
+        const string file = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        server.Repository.Write(file, File.ReadAllText(Path.Combine(server.Repository.Root, file))
+            + "links:\n  - { label: Open DNS admin, url: \"https://10.15.30.11:53443/\" }\n");
+        server.Commit("Link the admin console");
+        await server.SyncAsync();
+        await server.TickAsync();
+        await ScheduleAsync(server);
+        await server.TickAsync();
+
+        Assert.Equal(runs, await server.QueryAsync(db => db.Runs.CountAsync()));
+        Assert.Empty(agent.TakeAssignments());
+        var resource = await server.ResourceAsync(Guest);
+        var guest = (await http.GetFromJsonAsync<JsonObject>($"/api/guests/{resource.Id}"))!;
+        var link = guest["guest"]!["links"]!.AsArray().Single()!;
+        Assert.Equal("Open DNS admin", link["label"]!.GetValue<string>());
+        Assert.Equal("https://10.15.30.11:53443/", link["url"]!.GetValue<string>());
+        Assert.True(guest["inSync"]!.GetValue<bool>());
+        Assert.True(guest["configuration"]!["inSync"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public async Task An_agent_running_on_the_guest_never_configures_it()
     {
         await using var server = await ServerHarness.StartAsync(postgres, Repository.Repository());

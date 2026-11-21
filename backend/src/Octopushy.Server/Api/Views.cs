@@ -1015,6 +1015,7 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             definition?["type"] is JsonValue type && type.TryGetValue<string>(out var typeText) ? typeText : null,
             definition is JsonObject guestJson ? ConfigureInputs.AddressOf(guestJson) : null,
             services,
+            GuestDefinition.LinksOf(definition).Select(l => new GuestLinkDto(l.Label, l.Url)).ToList(),
             MachineDrift.Of(resource, definition?["host"]?.GetValue<string>(), observation) is { } drift
                 ? new MachineDriftDto(drift.Kind, drift.Vmid, drift.DeclaredHost, drift.ObservedHost, drift.ObservedAt, drift.Detail)
                 : null);

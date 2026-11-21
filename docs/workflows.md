@@ -593,7 +593,7 @@ Each run has an inputs hash, and Octopushy proposes one automatic run per hash. 
 resolved to: **its id and version, every file in its folder, and every file of the roots that run uses.** What was written
 is not hashed, only what it resolved to, so `@2` and `@2.3` resolving to the same version are the same.
 
-- **Provision:** the guest's definition without its description, policy, execution, secrets, secret files, schedules,
+- **Provision:** the guest's definition without its description, links, policy, execution, secrets, secret files, schedules,
   `renamedFrom` and the access fields only Ansible uses; its host and installation settings; its template; the workflow; and
   the machine stage's root. Inputs are part of it, since OpenTofu gets them.
 - **Configure:** the guest's inputs, secrets, secret files and access; the workflow; the setup stage's root; and the guest's
@@ -770,6 +770,8 @@ secrets:                          # extra var -> store key; only the playbook ge
   machine_tools_token: { store: proxmox/korriban/krb-app-01/machine_tools_token }
 schedules:                        # actions of the workflow, in cron, in the lab's timezone
   - { action: update-tools, cron: "0 6 * * *" }
+links:                            # pages people open for it: shown beside Open in Proxmox, never run or checked
+  - { label: Open admin console, url: "https://10.1.0.31:8443/" }
 access:
   user: ops
   hostKey: { store: proxmox/korriban/krb-app-01/host-key }  # read through Proxmox, never scanned; not needed when
@@ -796,6 +798,13 @@ should wait on an automatic one. It changes approval only: `destructive`, when u
 so a destructive action on a manual guest keeps waiting. A guest's `policy.actions` names its workflow's actions,
 `setup` included, and an action the workflow lacks is a validation error. Like the rest of `policy`, changing it starts no
 run. The guest's page lists each action that takes its own approval, and where it was set.
+
+**A guest's `links` are pages people open for it,** such as an appliance's admin console that no service manages. Its
+page and its Inventory details show each one as a button labeled with its `label`, beside Open in Proxmox, which opens
+it in a new tab. Each `url` is an absolute `http` or `https` URL with a host and no user name or password; at most 16.
+Links are display metadata only: changing them starts no provision, configure or service run, and no uptime check
+probes them. A guest's link has no `tcp://` form, and is not listed on the Services page: a service's
+[links](#service) do that.
 
 `secrets`, `secretFiles`, `schedules` and `policy.actions` need a workflow with a setup stage, and so does `access.user` for it to log in.
 So does `access.hostKey`, unless the guest's host key is Octopushy's: a container's is pinned from its create task
