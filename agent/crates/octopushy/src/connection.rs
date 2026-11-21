@@ -370,6 +370,7 @@ fn handle(
             tracing::debug!(probe = %p.probe_id, protocol = %p.protocol, context = %p.context, "reachability probe");
             agent.prober.spawn(p, tx.clone(), probes.clone());
         }
+        Some(In::WakeOnLan(w)) => crate::wake::spawn(w),
         Some(In::Assignment(a)) => agent.manager.accept(a),
         Some(In::Cancel(c)) => {
             tracing::info!(attempt = %c.attempt_id, "cancel requested");

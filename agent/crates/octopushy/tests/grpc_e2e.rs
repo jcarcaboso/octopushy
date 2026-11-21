@@ -174,6 +174,7 @@ async fn hello_only_advertises_usable_tool_capabilities() {
             "reachability-v1",
             "uptime-v1",
             "uptime-tcp-v1",
+            "wake-on-lan-v1",
         ];
         if available {
             assert!(!hello.unavailable.contains_key("opentofu"));

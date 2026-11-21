@@ -225,7 +225,21 @@ message ServerMessage {
     // protocol and "ssh" from the "agent" context only to one that also lists "uptime-v1", and
     // "tcp" only to one that also lists "uptime-tcp-v1".
     ReachabilityProbe probe = 5;
+    // Sent only to an agent whose Hello lists the capability "wake-on-lan-v1".
+    WakeOnLan wake_on_lan = 6;
   }
+}
+
+// Asks the agent to send one Wake-on-LAN magic packet: UDP to broadcast:9, from the agent
+// process. Fire and forget: no report comes back, and a packet that reaches nothing is not an
+// error. An operator asks for it on a host of a trusted, managed installation, and the server
+// sends it to every connected agent that can, since none can tell whether it shares the host's
+// network segment.
+message WakeOnLan {
+  // The host's MAC address: exactly 6 bytes.
+  bytes mac = 1;
+  // An IPv4 address, such as "255.255.255.255" or a subnet's broadcast address.
+  string broadcast = 2;
 }
 
 message Welcome {

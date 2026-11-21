@@ -9,6 +9,7 @@
 //! - [`tools`]: running OpenTofu with podman, docker, or locally.
 //! - [`masking`]: secret masking for logs and errors.
 //! - [`reachability`]: credential-free probes the server routes work by.
+//! - [`wake`]: Wake-on-LAN packets an operator asks for.
 //! - [`plain_json`]: outputs as JSON with every number in plain form, as the controller stores them.
 //! - [`renewal`], [`identity`], [`tls`], [`paths`]: credentials and state.
 
@@ -31,6 +32,7 @@ pub mod run;
 pub mod status;
 pub mod tls;
 pub mod tools;
+pub mod wake;
 
 /// This binary's version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -316,7 +316,7 @@ export const korribanEndpoint = "https://10.15.60.3:8006/";
 
 const korribanHost: ObservedHost = {
   name: "korriban", declared: true, online: false, cpu: null, maxCpu: 12, memoryBytes: null, maxMemoryBytes: 48 * gib,
-  uptimeSeconds: null, concurrentOperations: 1, endpoint: korribanEndpoint,
+  uptimeSeconds: null, concurrentOperations: 1, endpoint: korribanEndpoint, wakeOnLanMac: "a8:a1:59:3c:0e:72",
 };
 
 const unmanaged: ObservedGuest[] = [

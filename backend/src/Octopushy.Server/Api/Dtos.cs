@@ -269,7 +269,12 @@ public sealed record ObservedHostDto(
     long? UptimeSeconds,
     int? ConcurrentOperations,
     /// <summary>The Proxmox API endpoint the definition gives this host: its own, or else the installation's.</summary>
-    string? Endpoint);
+    string? Endpoint,
+    /// <summary>The MAC address <c>wakeOnLan</c> gives this host, when an operator may wake it: null when observed only.</summary>
+    string? WakeOnLanMac = null);
+
+/// <summary>How many connected agents were asked to send the Wake-on-LAN packet.</summary>
+public sealed record WakeHostDto(int Agents);
 
 public sealed record GuestSummaryDto(
     Guid Id,

@@ -194,6 +194,7 @@ on("POST", "/api/guests/{id}/configure", ({ params }) => startFor(params.id, "gu
 on("POST", "/api/guests/{id}/access/rotate", ({ params }) => startFor(params.id, "guest", "rotate-access"));
 on("POST", "/api/services/{id}/deploy", ({ params }) => startFor(params.id, "service", "pipeline"));
 on("POST", "/api/installations/{id}/observe", () => undefined);
+on("POST", "/api/installations/{id}/hosts/{host}/wake", () => ({ agents: 2 }));
 on("POST", "/api/installations/{id}/trust", ({ body }) => ({
   endpoints: (body.endpoints as string[]) ?? [], untrusted: [], trustedAt: new Date().toISOString(), trustedBy: user ?? "ops", managementChanged: false,
 }) satisfies InstallationTrust);
