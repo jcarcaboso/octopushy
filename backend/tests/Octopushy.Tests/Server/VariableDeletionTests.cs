@@ -64,6 +64,36 @@ public class VariableDeletionTests(PostgresFixture postgres) : IClassFixture<Pos
     }
 
     [Fact]
+    public async Task Purging_deletes_the_keys_nothing_uses_and_keeps_the_rest_with_the_reason()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        using var client = await SignInAsync(server);
+        await server.SyncAndTrustAsync(client);
+        const string Unused = "old/unused-token";
+        const string Plain = "old/unused-motd";
+        await server.SetSecretAsync(Unused, "a token nothing references");
+        await server.SetPlainAsync(Plain, "a plain value nothing references");
+
+        var response = await client.PostAsJsonAsync("/api/variables/purge", new { keys = new[] { Unused, Token, "system/anything", Plain, "old/already-gone" } });
+        response.EnsureSuccessStatusCode();
+        var body = (await response.Content.ReadFromJsonAsync<JsonObject>())!;
+        Assert.Equal([Unused], body["deleted"]!.AsArray().Select(k => k!.GetValue<string>()));
+        var kept = body["kept"]!.AsArray().ToDictionary(k => k!["key"]!.GetValue<string>(), k => k!["reason"]!.GetValue<string>());
+        Assert.Equal([Token, "system/anything", Plain], kept.Keys);
+        Assert.StartsWith($"'{Token}' is still used by ", kept[Token]);
+        Assert.Equal($"'{Plain}' is not a secret. Purge deletes only secrets.", kept[Plain]);
+        Assert.True(await server.QueryAsync(db => db.StoreEntries.AnyAsync(e => e.Key == Plain)));
+        Assert.False(await server.QueryAsync(db => db.StoreEntries.AnyAsync(e => e.Key == Unused)));
+        Assert.True(await server.QueryAsync(db => db.StoreEntries.AnyAsync(e => e.Key == Token)));
+        Assert.Equal("ops", (await server.QueryAsync(db => db.DeletedStoreKeys.AsNoTracking().SingleAsync(d => d.Key == Unused))).DeletedBy);
+
+        // A request without a list, or with a null key in it, is refused as a whole.
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/variables/purge", new { })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/variables/purge", new { keys = new[] { Token, null } })).StatusCode);
+        Assert.True(await server.QueryAsync(db => db.StoreEntries.AnyAsync(e => e.Key == Token)));
+    }
+
+    [Fact]
     public async Task Deleting_is_refused_while_a_definition_at_the_branch_head_references_the_key()
     {
         await using var server = await ServerHarness.StartAsync(postgres);

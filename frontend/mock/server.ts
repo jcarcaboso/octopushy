@@ -370,6 +370,14 @@ on("DELETE", "/api/variables", ({ query }) => {
   data.variables.entries = data.variables.entries.filter((v) => v.key !== key);
   data.variableActive.delete(key);
 });
+on("POST", "/api/variables/purge", ({ body }) => {
+  const named = body.keys as string[];
+  const deleted = named.filter((key) => findVariable(key)?.visibility === "secret" && findVariable(key)?.usedBy.length === 0);
+  const kept = named.filter((key) => !deleted.includes(key)).map((key) => ({ key, reason: `'${key}' is still used. Delete it once nothing uses it.` }));
+  data.variables.entries = data.variables.entries.filter((v) => !deleted.includes(v.key));
+  for (const key of deleted) data.variableActive.delete(key);
+  return { deleted, kept };
+});
 on("POST", "/api/variables/reveal", ({ body }) => ({
   values: (body.keys as string[]).map((key) => {
     const active = (data.variableHistory.get(key) ?? []).find((v) => v.version === data.variableActive.get(key) && v.status === "active");

@@ -750,6 +750,58 @@ public static partial class Endpoints
         })
         .WithName("deleteVariable");
 
+        // Deletes each named secret as deleteVariable would; a key something still holds, or a plain one, is kept with the reason,
+        // and the rest still go. A key already gone is in neither list.
+        group.MapPost("/purge", async (VariablePurgeRequest request, HttpContext http, RunEngine engine, RevisionCache revisions, RepositoryMirror mirror,
+            ILoggerFactory loggers, CancellationToken ct) =>
+        {
+            var keys = (request.Keys ?? []).Distinct(StringComparer.Ordinal).ToList();
+            if (keys.Count is 0 or > 1000 || keys.Contains(null!))
+            {
+                throw new StoreException("Name between 1 and 1000 keys to purge, none of them null.");
+            }
+
+            var actor = http.User.Identity?.Name ?? "administrator";
+            var result = await engine.ExecuteAsync(async (db, services) =>
+            {
+                var store = services.GetRequiredService<VariableStore>();
+                var deleted = new List<string>();
+                var kept = new List<KeptVariableDto>();
+                foreach (var key in keys)
+                {
+                    try
+                    {
+                        VariableStore.CheckUserKey(key);
+                        var visibility = await db.StoreEntries.AsNoTracking().Where(e => e.Key == key).Select(e => e.Visibility).FirstOrDefaultAsync(ct);
+                        if (visibility is null)
+                        {
+                            continue;
+                        }
+
+                        if (visibility != Visibilities.Secret)
+                        {
+                            kept.Add(new KeptVariableDto(key, $"'{key}' is not a secret. Purge deletes only secrets."));
+                            continue;
+                        }
+
+                        var holders = await VariableUses.HoldingAsync(db, revisions, mirror, key, ct);
+                        await store.DeleteAsync(key, holders, actor, ct);
+                        deleted.Add(key);
+                    }
+                    catch (StoreException e)
+                    {
+                        kept.Add(new KeptVariableDto(key, e.Message));
+                    }
+                }
+
+                return new VariablePurgeDto(deleted, kept);
+            }, ct);
+            loggers.CreateLogger("Octopushy.Server.Variables").LogInformation(
+                "{User} purged {Keys}.", actor, string.Join(", ", result.Deleted));
+            return TypedResults.Ok(result);
+        })
+        .WithName("purgeVariables");
+
         group.MapPost("/reveal", async (VariableRevealRequest request, HttpContext http, VariableStore store, ILoggerFactory loggers, CancellationToken ct) =>
         {
             var keys = request.Keys.Distinct(StringComparer.Ordinal).ToList();

@@ -62,7 +62,7 @@ export function renderAt(ui: ReactElement, { path, route }: { path: string; rout
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false }, mutations: { retry: false } },
   });
-  return render(
+  const rendered = render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[route]}>
         <Routes>
@@ -71,4 +71,5 @@ export function renderAt(ui: ReactElement, { path, route }: { path: string; rout
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...rendered, client };
 }

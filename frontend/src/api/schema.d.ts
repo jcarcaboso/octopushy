@@ -1173,6 +1173,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/variables/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["purgeVariables"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/variables/reveal": {
         parameters: {
             query?: never;
@@ -1957,6 +1973,10 @@ export interface components {
         };
         JsonNode: unknown;
         JsonObject: Record<string, never>;
+        KeptVariableDto: {
+            key: string;
+            reason: string;
+        };
         LabDto: {
             /** Format: uuid */
             id: string;
@@ -2658,6 +2678,13 @@ export interface components {
             /** Format: int32 */
             expectedCurrentVersion: number;
             verificationNote?: null | string;
+        };
+        VariablePurgeDto: {
+            deleted: string[];
+            kept: components["schemas"]["KeptVariableDto"][];
+        };
+        VariablePurgeRequest: {
+            keys: string[];
         };
         VariableRevealDto: {
             values: components["schemas"]["RevealedVariableDto"][];
@@ -7102,6 +7129,57 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    purgeVariables: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VariablePurgeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VariablePurgeDto"];
+                };
             };
             /** @description Bad Request */
             400: {
