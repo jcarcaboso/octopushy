@@ -11,7 +11,7 @@ export const guest = (name: string, services: ServiceSummary[]): GuestSummary =>
   id: `guest-${name}`, address: `home/pve01/${name}`, name, host: "pve01", vmid: 100, lifecycle: "active", status: "in-sync", statusDetail: null,
   valid: true, observed: null, activeRun: null, lastRun: null, workflow: null, type: "vm", accessAddress: null,
   // Services take the guest's address, as the server gives them.
-  services: services.map((s) => ({ ...s, address: `home/pve01/${name}/${s.name}` })),
+  services: services.map((s) => ({ ...s, address: `home/pve01/${name}/${s.name}` })), links: [],
 });
 
 export const inventoryOf = (guests: GuestSummary[]): Inventory => ({

@@ -9,6 +9,7 @@ import { Card } from "../components/Card";
 import { JsonBlock } from "../components/CodeBlock";
 import { DefinitionSheet, ViewYamlButton } from "../components/DefinitionSheet";
 import { Glance } from "../components/Glance";
+import { GuestLinks } from "../components/GuestLinks";
 import { IssueList } from "../components/IssueList";
 import { GuestConfigurationCard } from "../components/GuestConfiguration";
 import { ManagedAccessCard } from "../components/ManagedAccess";
@@ -171,6 +172,7 @@ export function GuestPage() {
         }
         actions={
           <>
+            <GuestLinks guest={guest} />
             {data.definitionText !== null ? <ViewYamlButton file={data.definitionFile} text={data.definitionText} issues={data.issues} /> : null}
             {data.missingSince || data.retiredAt ? null : <ChangeActions resourceId={guest.id} kind="guest" />}
             {data.missingSince && !data.retiredAt ? <DetachGuest id={guest.id} address={guest.address} noun={noun} /> : null}

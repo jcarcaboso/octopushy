@@ -1852,6 +1852,10 @@ export interface components {
             attachedAt?: null | string;
             attachedBy?: null | string;
         };
+        GuestLinkDto: {
+            label: string;
+            url: string;
+        };
         GuestScheduleDto: {
             action: string;
             cron: string;
@@ -1887,6 +1891,7 @@ export interface components {
             type: null | string;
             accessAddress: null | string;
             services: components["schemas"]["ServiceSummaryDto"][];
+            links: components["schemas"]["GuestLinkDto"][];
             drift?: null | components["schemas"]["MachineDriftDto"];
         };
         IconNamesDto: {

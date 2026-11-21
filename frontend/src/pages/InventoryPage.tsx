@@ -6,6 +6,7 @@ import type { UptimeCheck } from "../api/types";
 import { Badge, StatusBadge } from "../components/Badge";
 import { Callout } from "../components/Callout";
 import { DeleteInstallation } from "../components/DeleteInstallation";
+import { GuestLinks } from "../components/GuestLinks";
 import { IssueList } from "../components/IssueList";
 import { Meter } from "../components/Meter";
 import { ObserveError } from "../components/ObserveError";
@@ -329,6 +330,7 @@ function MachineDetail({ node, machine, span }: { node: NodeEntry; machine: Mach
                 Open in Proxmox
               </ProxmoxLink>
             ) : null}
+            <GuestLinks guest={guest} small />
             <Link className="button button--small" to={`/guests/${guest.id}`}>
               Machine page
             </Link>

@@ -51,6 +51,7 @@ interface GuestBase {
   configuration?: GuestConfiguration;
   access?: boolean;
   approval?: "manual";
+  links?: { label: string; url: string }[];
   /** The installation and its one node; pve01 unless said. */
   node?: string;
 }
@@ -96,7 +97,8 @@ const guests: GuestBase[] = [
   { id: "web", name: "web", vmid: 120, type: "container", workflow: "lxc-basic@1", resolved: "lxc-basic@1.2", ip: "10.15.60.20", cores: 2,
     memory: 2048, disks: [16], tags: ["homelab", "web"], uptimeHours: 700, access: true },
   { id: "dns", name: "dns", vmid: 121, type: "container", workflow: "lxc-basic@1", resolved: "lxc-basic@1.2", ip: "10.15.60.21", cores: 1,
-    memory: 1024, disks: [8], tags: ["homelab", "dns"], uptimeHours: 0 },
+    memory: 1024, disks: [8], tags: ["homelab", "dns"], uptimeHours: 0,
+    links: [{ label: "Open DNS admin", url: "https://10.15.60.21:53443/" }] },
 ];
 
 // korriban is a second, smaller installation, offline for two days: its node and machine show as down on the Inventory.
@@ -138,6 +140,7 @@ function guestYaml(g: GuestBase) {
     `  address: ${g.ip}/24`,
     "  gateway: 10.15.60.1",
     `tags: [${g.tags.join(", ")}]`,
+    ...(g.links ? ["links:", ...g.links.map((l) => `  - { label: ${l.label}, url: "${l.url}" }`)] : []),
     `workflow: ${g.workflow}`,
     ...(g.inputs ? ["inputs:", ...Object.entries(g.inputs).map(([k, v]) => `  ${k}: ${String(v)}`)] : []),
     ...(g.access ? ["access:", "  user: ops", `  sshKey: { store: proxmox/pve01/${g.name}/ssh-key }`] : []),
@@ -151,7 +154,7 @@ function guestSummary(g: GuestBase): GuestSummary {
   return {
     id: g.id, address: address(g), name: g.name, host: nodeOf(g), vmid: g.vmid, lifecycle: "active", status: state, statusDetail,
     valid: true, observed: g.node === "korriban" ? null : observed(g), activeRun, lastRun, workflow: { reference: g.workflow, resolved: g.resolved },
-    type: g.type, accessAddress: g.ip, services: servicesOf(g.id),
+    type: g.type, accessAddress: g.ip, services: servicesOf(g.id), links: g.links ?? [],
   };
 }
 

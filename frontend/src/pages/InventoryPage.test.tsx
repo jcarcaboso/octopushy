@@ -13,7 +13,7 @@ const service = (guest: string, name: string, links: string[], names: ServiceSum
 const guest = (installation: string, host: string, name: string, vmid: number, services: ServiceSummary[] = []): GuestSummary => ({
   id: `guest-${name}`, address: `${installation}/${name}`, name, host, vmid, lifecycle: "active", status: "in-sync", statusDetail: null, valid: true,
   observed: null, activeRun: null, lastRun: null, workflow: { reference: "debian-vm@1", resolved: "debian-vm@1.2" }, type: "vm",
-  accessAddress: `10.0.0.${vmid % 250}`, services,
+  accessAddress: `10.0.0.${vmid % 250}`, services, links: [],
 });
 
 const haos: ObservedGuest = {
@@ -36,7 +36,7 @@ const media = guest("home/pve01", "pve01", "media", 115, [
   service("home/pve01/media", "jellyfin", ["https://jellyfin.lab.test/", "https://media.lab.test/"]),
   service("home/pve01/media", "arcane", ["https://arcane.lab.test/"], [{ name: "arcane.lab.test", stage: "dns", url: "https://arcane.lab.test/" }]),
 ]);
-const dns = guest("home/pve01", "pve01", "dns", 121);
+const dns = { ...guest("home/pve01", "pve01", "dns", 121), links: [{ label: "Open DNS admin", url: "https://10.0.0.121:53443/" }] };
 const data = guest("home/pve01", "pve01", "data", 111, [service("home/pve01/data", "postgres", ["tcp://10.0.0.111:5432"])]);
 const nas = guest("home/korriban", "korriban", "nas", 200);
 
@@ -140,6 +140,23 @@ it("opens a machine in Proxmox in the same tab as its node", async () => {
   const proxmox = within(details).getByRole("link", { name: /Open in Proxmox/ });
   expect(proxmox).toHaveAttribute("href", "https://10.0.0.2:8006/#v1:0:=qemu%2F115:4:::::::");
   expect(proxmox).toHaveAttribute("target", "proxmox-home-pve01-pve01");
+});
+
+it("opens a machine's own links beside Proxmox, in a new tab", async () => {
+  show("/inventory?node=home/pve01/pve01&machine=home/pve01/dns");
+  const details = await screen.findByRole("region", { name: "Details" });
+  expect(within(details).getByRole("link", { name: /Open in Proxmox/ })).toBeInTheDocument();
+  const admin = within(details).getByRole("link", { name: /Open DNS admin/ });
+  expect(admin).toHaveAttribute("href", "https://10.0.0.121:53443/");
+  expect(admin).toHaveAttribute("target", "_blank");
+  expect(admin).toHaveAttribute("rel", "noreferrer");
+});
+
+it("shows no other links for a machine without them", async () => {
+  show("/inventory?node=home/pve01/pve01&machine=home/pve01/media");
+  const details = await screen.findByRole("region", { name: "Details" });
+  const header = within(details).getByRole("heading", { name: "media" }).closest("header")!;
+  expect(within(header).getAllByRole("link").map((l) => l.textContent?.trim())).toEqual(["Open in Proxmox", "Machine page"]);
 });
 
 it("keeps unmanaged guests folded until asked", async () => {

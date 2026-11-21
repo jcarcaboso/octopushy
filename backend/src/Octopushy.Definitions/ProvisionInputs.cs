@@ -23,9 +23,9 @@ public sealed record ProvisionInputs(
     /// <summary>For a built template, the image the variables name, or null when it was not given: see <see cref="Build"/>.</summary>
     public TemplateImage? Image { get; init; }
 
-    /// <summary>Guest fields excluded from the infrastructure hash.</summary>
+    /// <summary>Guest fields excluded from the infrastructure hash. <c>links</c> are only shown.</summary>
     private static readonly string[] NotProvisioned =
-        ["description", "policy", "execution", "secrets", "secretFiles", "schedules", "renamedFrom", "workflow"];
+        ["description", "links", "policy", "execution", "secrets", "secretFiles", "schedules", "renamedFrom", "workflow"];
 
     /// <summary>Builds the inputs for a valid guest; the repository must have validated it.</summary>
     /// <param name="keyIssued">Whether Octopushy already holds a key for the guest; see <see cref="ManagedAccess.Wanted"/>.</param>

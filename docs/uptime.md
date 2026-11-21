@@ -30,7 +30,8 @@ links:
 
 Each link must be an absolute `http` or `https` URL with a host and no credentials, or `tcp://host:port`; at most 16. An
 `http` or `https` link is checked as a browser would see it: over TLS, the certificate must be trusted by the agent's own
-trust store.
+trust store. A guest's own `links` in `guest.yaml`, such as an admin console, are only shown on its page and never
+checked ([guest](workflows.md#guest)).
 
 **A `tcp://` link is for a service that does not speak HTTP,** such as a database: `tcp://10.15.30.3:5432`. It names a
 host and a port, and nothing else. It is checked, shown in the Inventory, and never offered to open. Up says that

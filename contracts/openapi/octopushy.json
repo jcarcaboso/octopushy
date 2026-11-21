@@ -8198,6 +8198,21 @@
           }
         }
       },
+      "GuestLinkDto": {
+        "required": [
+          "label",
+          "url"
+        ],
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
       "GuestScheduleDto": {
         "required": [
           "action",
@@ -8287,7 +8302,8 @@
           "workflow",
           "type",
           "accessAddress",
-          "services"
+          "services",
+          "links"
         ],
         "type": "object",
         "properties": {
@@ -8385,6 +8401,12 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ServiceSummaryDto"
+            }
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GuestLinkDto"
             }
           },
           "drift": {

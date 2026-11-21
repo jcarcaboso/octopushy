@@ -96,6 +96,21 @@ describe("GuestPage", () => {
     expect(screen.queryByRole("region", { name: /waits for your approval/ })).toBeNull();
   });
 
+  it("opens the links its definition names in a new tab, and none when it names none", async () => {
+    mockApi({ "GET /api/guests/guest-1": () => detail({}, { links: [{ label: "Open DNS admin", url: "https://10.15.30.11:53443/" }] }) });
+    const { unmount } = renderAt(<GuestPage />, route);
+    const admin = await screen.findByRole("link", { name: /Open DNS admin/ });
+    expect(admin).toHaveAttribute("href", "https://10.15.30.11:53443/");
+    expect(admin).toHaveAttribute("target", "_blank");
+    expect(admin).toHaveAttribute("rel", "noreferrer");
+    unmount();
+
+    mockApi({ "GET /api/guests/guest-1": () => detail() });
+    renderAt(<GuestPage />, route);
+    await screen.findByRole("heading", { name: "Hardware" });
+    expect(screen.queryByRole("link", { name: /Open DNS admin/ })).toBeNull();
+  });
+
   it("keeps workflow, revisions, identity and what Proxmox reports in one State card, and outputs folded", async () => {
     mockApi({ "GET /api/guests/guest-1": () => detail({}, { observed }) });
     renderAt(<GuestPage />, route);
