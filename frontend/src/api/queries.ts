@@ -723,6 +723,15 @@ export function useDeleteVariable() {
   });
 }
 
+/** Deletes each key nothing uses; the server checks every one again and keeps those still used, with the reason. */
+export function usePurgeVariables() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (keys: string[]) => unwrap(api.POST("/api/variables/purge", { body: { keys } })),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.variables }),
+  });
+}
+
 export function useUpdateRepository() {
   const client = useQueryClient();
   return useMutation({

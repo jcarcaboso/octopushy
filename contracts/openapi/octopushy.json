@@ -5106,6 +5106,66 @@
         }
       }
     },
+    "/api/variables/purge": {
+      "post": {
+        "tags": [
+          "Variables"
+        ],
+        "operationId": "purgeVariables",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VariablePurgeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariablePurgeDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/variables/reveal": {
       "post": {
         "tags": [
@@ -8733,6 +8793,21 @@
       "JsonObject": {
         "type": "object"
       },
+      "KeptVariableDto": {
+        "required": [
+          "key",
+          "reason"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
       "LabDto": {
         "required": [
           "id",
@@ -11719,6 +11794,41 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "VariablePurgeDto": {
+        "required": [
+          "deleted",
+          "kept"
+        ],
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "kept": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeptVariableDto"
+            }
+          }
+        }
+      },
+      "VariablePurgeRequest": {
+        "required": [
+          "keys"
+        ],
+        "type": "object",
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

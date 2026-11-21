@@ -709,6 +709,14 @@ public sealed record RevealedVariableDto(string Key, string? Value);
 
 public sealed record VariableRevealDto(IReadOnlyList<RevealedVariableDto> Values);
 
+/// <summary>The secrets to delete, as the operator confirmed them; each is checked again before it goes.</summary>
+public sealed record VariablePurgeRequest(IReadOnlyList<string> Keys);
+
+/// <summary>A key a purge did not delete, and why: something still uses it, it is not a secret, or it could not be checked.</summary>
+public sealed record KeptVariableDto(string Key, string Reason);
+
+public sealed record VariablePurgeDto(IReadOnlyList<string> Deleted, IReadOnlyList<KeptVariableDto> Kept);
+
 public sealed record VariableVersionRevealRequest(string Key, int Version);
 
 /// <summary>One version's value, whatever its state; revealing it releases it to nothing.</summary>

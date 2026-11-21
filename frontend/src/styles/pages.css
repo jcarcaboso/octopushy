@@ -2602,12 +2602,14 @@
   color: var(--text-muted);
 }
 
-.agent-menu {
+.agent-menu,
+.options-menu {
   position: relative;
   justify-self: end;
 }
 
-.agent-menu__list {
+.agent-menu__list,
+.options-menu__list {
   position: absolute;
   top: 100%;
   right: 0;
@@ -2624,11 +2626,13 @@
   cursor: default;
 }
 
-.agent-menu__list[hidden] {
+.agent-menu__list[hidden],
+.options-menu__list[hidden] {
   display: none;
 }
 
-.agent-menu__item {
+.agent-menu__item,
+.options-menu__item {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -2641,21 +2645,35 @@
   text-align: left;
 }
 
-.agent-menu__item:hover:not(:disabled) {
+.agent-menu__item:hover:not(:disabled),
+.options-menu__item:hover:not(:disabled) {
   background: var(--surface-3);
 }
 
-.agent-menu__item--danger > :first-child {
+.agent-menu__item--danger > :first-child,
+.options-menu__item--danger > :first-child {
   color: var(--danger-fg);
 }
 
-.agent-menu__hint {
+.agent-menu__hint,
+.options-menu__hint {
   font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
 .agent-menu__error {
   padding: var(--space-1) 0.625rem var(--space-2);
+}
+
+.options-menu__item:disabled > :first-child {
+  color: var(--text-muted);
+}
+
+.purge-list {
+  max-height: 14rem;
+  overflow: auto;
+  margin: var(--space-2) 0;
+  padding-left: var(--space-5);
 }
 
 .agent-detail {

@@ -13,6 +13,7 @@ import { FolderTree } from "./variables/FolderTree";
 import { GuardLink } from "./variables/GuardLink";
 import { LeaveContext } from "./variables/leave";
 import { NewEntryForm } from "./variables/NewEntryForm";
+import { OptionsMenu } from "./variables/OptionsMenu";
 import { entryHref, folderHref, folderTree, foldersOn, lastSegment, listFolder, matchesSearch, parentFolder } from "./variables/folders";
 
 type View = "folders" | "all";
@@ -428,7 +429,16 @@ export function VariablesPage() {
   return (
     <LeaveContext value={leave}>
       <div className="vars-page">
-        <PageHeader title="Variables" meta="The variable store: values kept outside Git, referenced from definitions by key." actions={setButton} />
+        <PageHeader
+          title="Variables"
+          meta="The variable store: values kept outside Git, referenced from definitions by key."
+          actions={
+            <>
+              {data ? <OptionsMenu entries={entries} /> : null}
+              {setButton}
+            </>
+          }
+        />
         {isPending ? (
           <PageSkeleton rows={2} />
         ) : !data ? (

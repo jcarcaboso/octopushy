@@ -962,3 +962,54 @@ describe("VariablesPage revealing secrets", () => {
     expect(within(await pane()).getByText("Concealed. 3 lines.")).toBeInTheDocument();
   });
 });
+
+describe("VariablesPage options", () => {
+  it("purges the secrets nothing uses, after asking, and says what was kept", async () => {
+    const user = userEvent.setup();
+    const unused = "old/unused-token";
+    const plain = "old/unused-motd";
+    let late = false;
+    let finish: () => void = () => {};
+    const { requests } = mockApi({
+      "GET /api/variables": () => ({
+        entries: [
+          entry(),
+          entry({ key: unused, usedBy: [] }),
+          entry({ key: "old/raced", usedBy: [] }),
+          entry({ key: plain, visibility: "plain", usedBy: [] }),
+          ...(late ? [entry({ key: "old/set-since", usedBy: [] })] : []),
+        ],
+        missing: [],
+        system: [],
+      }),
+      "POST /api/variables/purge": () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ deleted: [unused], kept: [{ key: "old/raced", reason: "'old/raced' is still used by run #4." }] });
+        }),
+    });
+    const { client } = renderPage();
+    await user.click(await screen.findByRole("button", { name: "Options" }));
+    await user.click(screen.getByRole("button", { name: /^Purge/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Purge 2 unused secrets?" });
+    expect(within(dialog).getByText(unused)).toBeInTheDocument();
+    expect(within(dialog).queryByText(key)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(plain)).not.toBeInTheDocument();
+
+    // A key set while the dialog is open is not purged: only what the operator saw is sent.
+    late = true;
+    await client.refetchQueries();
+    await screen.findByText("Deletes the 3 secrets nothing uses.");
+    await user.click(within(dialog).getByRole("button", { name: "Purge" }));
+    // While it runs the dialog stays, so its result is not lost.
+    await user.click(within(dialog).getByRole("button", { name: "Keep as is" }));
+    expect(screen.getByRole("dialog", { name: "Purge 2 unused secrets?" })).toBeInTheDocument();
+    finish();
+
+    const done = await screen.findByRole("dialog", { name: "Purge finished" });
+    expect(done).toHaveTextContent("Deleted 1 secret.");
+    expect(within(done).getByText(unused)).toBeInTheDocument();
+    expect(done).toHaveTextContent("'old/raced' is still used by run #4.");
+    const sent = requests.find((r) => r.method === "POST" && r.path === "/api/variables/purge");
+    expect(sent?.body).toEqual({ keys: [unused, "old/raced"] });
+  });
+});
