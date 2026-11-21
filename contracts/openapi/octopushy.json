@@ -1359,6 +1359,75 @@
         }
       }
     },
+    "/api/installations/{id}/hosts/{host}/wake": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "wakeInstallationHost",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "host",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WakeHostDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/installations/{id}/trust": {
       "post": {
         "tags": [
@@ -9311,6 +9380,12 @@
               "null",
               "string"
             ]
+          },
+          "wakeOnLanMac": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -11802,6 +11877,18 @@
             "items": {
               "$ref": "#/components/schemas/SystemVariableDto"
             }
+          }
+        }
+      },
+      "WakeHostDto": {
+        "required": [
+          "agents"
+        ],
+        "type": "object",
+        "properties": {
+          "agents": {
+            "type": "integer",
+            "format": "int32"
           }
         }
       },

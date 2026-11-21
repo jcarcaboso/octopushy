@@ -184,6 +184,28 @@ describe("installation page", () => {
     expect(screen.queryByRole("region", { name: "Runs of its guests" })).toBeNull();
     // One declared host is in the figures; its table is left out.
     expect(screen.queryByRole("heading", { name: "Hosts" })).toBeNull();
+    // Online: nothing to wake.
+    expect(screen.queryByRole("button", { name: /^Wake/ })).toBeNull();
+  });
+
+  it("wakes a host that declares wakeOnLan once its observation fails, though the last one saw it online", async () => {
+    const user = userEvent.setup();
+    const host = { name: "korriban", declared: true, online: true, cpu: 0.1, maxCpu: 8, memoryBytes: null, maxMemoryBytes: null,
+      uptimeSeconds: 600, concurrentOperations: null, endpoint, wakeOnLanMac: "a8:a1:59:3c:0e:72" };
+    const { requests } = mockApi({
+      [`GET /api/installations/${id}`]: () => detail({ ...summary(trusted), hosts: [host], observedAt: "2026-11-13T08:00:00Z",
+        observeError: "Cannot reach https://10.1.0.10:8006/: no route to host", observeErrorAt: "2026-11-13T09:00:00Z" }),
+      [`POST /api/installations/${id}/hosts/korriban/wake`]: () => ({ agents: 2 }),
+    });
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Wake korriban" }));
+    const dialog = await screen.findByRole("dialog", { name: "Wake korriban?" });
+    expect(dialog).toHaveTextContent("a8:a1:59:3c:0e:72");
+    await user.click(within(dialog).getByRole("button", { name: "Send magic packet" }));
+
+    expect(await within(dialog).findByText(/Sent through 2 agents/)).toBeInTheDocument();
+    expect(requests.filter((r) => r.method === "POST").map((r) => r.path)).toEqual([`/api/installations/${id}/hosts/korriban/wake`]);
   });
 });
 

@@ -12,6 +12,7 @@ import { DeleteInstallation } from "../components/DeleteInstallation";
 import { GuestTable } from "../components/GuestTable";
 import { ObserveError } from "../components/ObserveError";
 import { HostTable } from "../components/HostTable";
+import { WakeHostButton } from "../components/WakeHost";
 import { IssueList } from "../components/IssueList";
 import { KeyValue } from "../components/KeyValue";
 import { Meter } from "../components/Meter";
@@ -286,6 +287,7 @@ export function InstallationPage() {
               <Eye size={15} aria-hidden="true" />
               {observing ? "Observing…" : "Observe now"}
             </button>
+            {installation.hosts.length === 1 ? <WakeHostButton installationId={id} host={installation.hosts[0]} observeFailed={installation.observeError !== null} /> : null}
             <DeleteInstallation installation={installation} />
           </>
         }
@@ -321,7 +323,7 @@ export function InstallationPage() {
             </Card>
             {installation.hosts.length === 1 && installation.hosts[0].declared ? null : (
               <Card title="Hosts" flush>
-                <HostTable hosts={installation.hosts} label="Hosts" />
+                <HostTable hosts={installation.hosts} label="Hosts" installationId={id} observeFailed={installation.observeError !== null} />
               </Card>
             )}
             <DefinitionSheet file={data.definitionFile} text={data.definitionText} kind="installation" issues={data.issues} />

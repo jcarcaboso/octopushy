@@ -434,6 +434,15 @@ export function useObserveInstallation() {
   });
 }
 
+/** Asks every agent that can to send a Wake-on-LAN packet for one of the installation's hosts. */
+export function useWakeHost() {
+  return useMutation({
+    retry: false,
+    mutationFn: ({ id, host }: { id: string; host: string }) =>
+      unwrap(api.POST("/api/installations/{id}/hosts/{host}/wake", { params: { path: { id, host } } })),
+  });
+}
+
 export function useDeleteInstallation() {
   const client = useQueryClient();
   return useMutation({

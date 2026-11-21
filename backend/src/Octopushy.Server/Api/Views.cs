@@ -944,7 +944,7 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         var hosts = declaredHosts.Select(h =>
             {
                 var o = observedHosts.FirstOrDefault(x => x["name"]?.GetValue<string>() == h.Key);
-                return Host(h.Key, true, o, h.Limit, h.Endpoint);
+                return Host(h.Key, true, o, h.Limit, h.Endpoint, installation.ObservedOnly ? null : HostWake.Mac(definition, h.Key));
             })
             .Concat(observedHosts.Where(o => declaredHosts.All(h => h.Key != o["name"]?.GetValue<string>()))
                 .Select(o => Host(o["name"]?.GetValue<string>() ?? "?", false, o, null, installationEndpoint)))
@@ -1035,7 +1035,7 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             g["kind"]?.GetValue<string>());
     }
 
-    private static ObservedHostDto Host(string name, bool declared, JsonObject? o, int? limit, string? endpoint) => new(
+    private static ObservedHostDto Host(string name, bool declared, JsonObject? o, int? limit, string? endpoint, string? wakeOnLanMac = null) => new(
         name,
         declared,
         o?["online"]?.GetValue<bool>(),
@@ -1045,7 +1045,8 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
         o?["maxMemoryBytes"]?.GetValue<long>(),
         o?["uptimeSeconds"]?.GetValue<long>(),
         limit,
-        endpoint);
+        endpoint,
+        wakeOnLanMac);
 
     private static string InstallationName(Resource installation) =>
         (installation.Definition is null ? null : JsonNode.Parse(installation.Definition)?["name"]?.GetValue<string>()) ?? installation.Address.Split('/')[^1];

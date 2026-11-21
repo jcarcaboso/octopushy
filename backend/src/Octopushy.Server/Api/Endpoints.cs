@@ -276,6 +276,18 @@ public static partial class Endpoints
             .WithTags("Inventory")
             .WithName("observeInstallation");
 
+        // Sends a Wake-on-LAN packet for one of the installation's hosts, through every connected agent that can.
+        api.MapPost("/installations/{id:guid}/hosts/{host}/wake", async (Guid id, string host, HttpContext http, OctopushyDb db,
+            AgentConnections connections, ILoggerFactory loggers, CancellationToken ct) =>
+        {
+            var agents = await HostWake.WakeAsync(db, connections, id, host, ct);
+            loggers.CreateLogger(typeof(HostWake)).LogInformation("{Actor} requested Wake-on-LAN for the host {Host} of installation {Installation}; queued for {Agents} agent(s)",
+                http.User.Identity?.Name, host, id, agents);
+            return TypedResults.Ok(new WakeHostDto(agents));
+        })
+            .WithTags("Inventory")
+            .WithName("wakeInstallationHost");
+
         api.MapPost("/installations/{id:guid}/trust", async (Guid id, TrustInstallationRequest request, HttpContext http,
             RunEngine engine, OrchestratorSignal signal, TimeProvider clock, CancellationToken ct) =>
             TypedResults.Ok(await engine.ExecuteAsync(async (db, _) =>

@@ -125,6 +125,7 @@ pub async fn run(opts: RunOptions, shutdown: CancellationToken) -> Result<()> {
         reachability::CAPABILITY.to_owned(),
         reachability::UPTIME_CAPABILITY.to_owned(),
         reachability::UPTIME_TCP_CAPABILITY.to_owned(),
+        crate::wake::CAPABILITY.to_owned(),
     ];
     let storage_dirs = storage_dirs(&opts, &paths.root, &work_dir, &provider_cache);
     let exec = Arc::new(ExecutorConfig {

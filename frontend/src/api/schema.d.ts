@@ -373,6 +373,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/installations/{id}/hosts/{host}/wake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["wakeInstallationHost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/installations/{id}/trust": {
         parameters: {
             query?: never;
@@ -2097,6 +2113,7 @@ export interface components {
             /** Format: int32 */
             concurrentOperations: null | number;
             endpoint: null | string;
+            wakeOnLanMac?: null | string;
         };
         OperatorTokenRequest: {
             name: string;
@@ -2678,6 +2695,10 @@ export interface components {
             entries: components["schemas"]["VariableDto"][];
             missing: components["schemas"]["MissingVariableDto"][];
             system: components["schemas"]["SystemVariableDto"][];
+        };
+        WakeHostDto: {
+            /** Format: int32 */
+            agents: number;
         };
         WebhookDto: {
             configured: boolean;
@@ -3946,6 +3967,56 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    wakeInstallationHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                host: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WakeHostDto"];
+                };
             };
             /** @description Bad Request */
             400: {

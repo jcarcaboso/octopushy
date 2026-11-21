@@ -1,16 +1,25 @@
 import type { ObservedHost } from "../api/types";
 import { formatBytes } from "../lib/format";
 import { formatUptime } from "../lib/time";
+import { canWake } from "../lib/wake";
 import { Badge } from "./Badge";
 import { Meter } from "./Meter";
 import { EmptyRow, Table } from "./Table";
+import { WakeHostButton } from "./WakeHost";
 
 function Online({ online }: { online: boolean | null }) {
   if (online === null) return <Badge tone="neutral">Not observed</Badge>;
   return online ? <Badge tone="success">Online</Badge> : <Badge tone="danger">Offline</Badge>;
 }
 
-export function HostTable({ hosts, label }: { hosts: ObservedHost[]; label: string }) {
+/** With <paramref name="installationId"/>, a host that may need waking gets its Wake button. */
+export function HostTable({ hosts, label, installationId, observeFailed = false }: {
+  hosts: ObservedHost[];
+  label: string;
+  installationId?: string;
+  observeFailed?: boolean;
+}) {
+  const wakeable = installationId !== undefined && hosts.some((h) => canWake(h, observeFailed));
   return (
     <Table label={label} className="table--hosts">
       <thead>
@@ -23,10 +32,15 @@ export function HostTable({ hosts, label }: { hosts: ObservedHost[]; label: stri
           <th scope="col" title="limits.concurrentOperations">
             Concurrency limit
           </th>
+          {wakeable ? (
+            <th scope="col">
+              <span className="visually-hidden">Power</span>
+            </th>
+          ) : null}
         </tr>
       </thead>
       <tbody>
-        {hosts.length === 0 ? <EmptyRow colSpan={6}>No hosts declared.</EmptyRow> : null}
+        {hosts.length === 0 ? <EmptyRow colSpan={wakeable ? 7 : 6}>No hosts declared.</EmptyRow> : null}
         {hosts.map((host) => {
           const cpu = host.cpu;
           const cores = host.maxCpu;
@@ -61,6 +75,11 @@ export function HostTable({ hosts, label }: { hosts: ObservedHost[]; label: stri
               </td>
               <td className="num nowrap">{formatUptime(host.uptimeSeconds)}</td>
               <td className="num">{limit ?? <span className="muted">None</span>}</td>
+              {wakeable ? (
+                <td className="num">
+                  <WakeHostButton installationId={installationId} host={host} observeFailed={observeFailed} small />
+                </td>
+              ) : null}
             </tr>
           );
         })}
