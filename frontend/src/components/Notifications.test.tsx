@@ -99,9 +99,10 @@ describe("notifications", () => {
       await arrive(told(3, "home/pve01/web/app is down"));
       const text = await toasts().findByText("home/pve01/web/app is down");
       // The bar that shows the time left runs with the timer, for as long as it does.
-      const bar = text.closest("li")!.querySelector(".toast__timer")!;
+      const bar = text.closest("li")!.querySelector<HTMLElement>(".toast__timer")!;
       expect(bar).toHaveClass("toast__timer--running");
-      expect(bar).toHaveStyle({ animationDuration: "8000ms" });
+      // jsdom 31's getComputedStyle no longer reads animation properties, so check the style set on the element.
+      expect(bar.style.animationDuration).toBe("8000ms");
       await user.hover(text);
       expect(bar).not.toHaveClass("toast__timer--running");
       await act(() => vi.advanceTimersByTime(20_000));
