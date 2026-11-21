@@ -71,6 +71,29 @@ class Recap(unittest.TestCase):
         recap = self.finish(self.callback(), {"_run": {"octopushy_outcome": "deferred", "octopushy_detail": "busy"}})
         self.assertEqual((recap["outcome"], recap["detail"]), ("deferred", "busy"))
 
+    def test_reports_are_short_texts_and_nothing_else(self):
+        reported = {
+            "certificate_sha256": "ab" * 32,
+            "cluster_role": "primary",
+            "number": 5,
+            "nested": {"a": "b"},
+            "long": "x" * 255,
+            "escaped": "\x01" * 50,
+            "x" * 65: "named too long",
+            "": "no name",
+        }
+        recap = self.finish(self.callback(), {"_run": {"octopushy_reports": reported}})
+        self.assertEqual(recap["reports"], {"certificate_sha256": "ab" * 32, "cluster_role": "primary"})
+
+    def test_reports_that_are_not_a_mapping_are_none(self):
+        recap = self.finish(self.callback(), {"_run": {"octopushy_reports": "ab" * 32}})
+        self.assertEqual(recap["reports"], {})
+
+    def test_at_most_eight_reports_are_kept(self):
+        reported = {f"r{i}": "v" for i in range(20)}
+        recap = self.finish(self.callback(), {"_run": {"octopushy_reports": reported}})
+        self.assertEqual(len(recap["reports"]), 8)
+
     def unreachable(self, callback, task, message):
         callback.v2_runner_on_unreachable(types.SimpleNamespace(task_name=task, _result={"msg": message}))
 
@@ -99,7 +122,8 @@ class Recap(unittest.TestCase):
                 self.unreachable(callback, text, text)
                 stats = types.SimpleNamespace(
                     processed={"g": 1}, summarize=lambda host: {"ok": 2},
-                    custom={"_run": {"octopushy_outcome": text, "octopushy_detail": text}},
+                    custom={"_run": {"octopushy_outcome": text, "octopushy_detail": text,
+                                     "octopushy_reports": {f"{i:02}" + "\x01" * 10: "\x01" * 42 for i in range(8)}}},
                 )
                 with mock.patch("os.write") as write:
                     callback.v2_playbook_on_stats(stats)

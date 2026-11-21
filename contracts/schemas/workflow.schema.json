@@ -84,6 +84,31 @@
         "dependentSchemas": { "promote": { "required": ["result"], "properties": { "result": { "const": "succeeded" } } } },
         "additionalProperties": false
       }
+    },
+    "reports": {
+      "description": "manages: vm or container, with a setup stage: values its playbooks may hand back with set_stats as octopushy_reports, such as a certificate's fingerprint. Octopushy keeps the latest of each per guest, from a playbook that ended as it meant to over the guest's pinned host key, and gives it to the guests that name this one among their peers. See docs/workflows.md#reports-and-peers.",
+      "type": "object",
+      "maxProperties": 8,
+      "propertyNames": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,62}$" },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string" },
+          "pattern": {
+            "description": "A regular expression the whole value has to match, or it is not kept. At most 256 bytes are kept.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": ["pattern"],
+        "additionalProperties": false
+      }
+    },
+    "peers": {
+      "description": "manages: vm or container, with a setup stage: the guests whose reports this guest's runs get, as a path into { inputs } where [] goes through an array, such as inputs.technitium_members[].name. Each value names a guest of the same lab, by id, whose workflow has the same id. A new report of a peer proposes this guest's setup once. See docs/workflows.md#reports-and-peers.",
+      "type": "string",
+      "pattern": "^inputs(\\.[A-Za-z_][A-Za-z0-9_-]*(\\[\\])?)+$"
     }
   },
   "required": ["schemaVersion", "version", "manages", "stages"],

@@ -151,6 +151,9 @@ public sealed partial class AssignmentBuilder
         };
         if (snapshot is not null)
             input["prepared"] = JsonNode.Parse(snapshot);
+        // What the peers reported when the run was made, exactly as the approved document names it: see GuestReports.
+        if (rotation is null && ansible.Peers is { } peers)
+            input["context"]!["peers"] = peers.DeepClone();
         if (step.Name != StepNames.Preview)
             input["sshKey"] = SecretNames.AnsibleSshKey;
         if (step.Name == StepNames.ConfirmRefused)
@@ -181,7 +184,7 @@ public sealed partial class AssignmentBuilder
     private static JsonObject Manifest(Run run, RunContext context)
     {
         var ansible = context.Ansible!;
-        return new JsonObject
+        var manifest = new JsonObject
         {
             ["commit"] = context.Commit,
             ["inputsHash"] = run.InputsHash,
@@ -198,6 +201,9 @@ public sealed partial class AssignmentBuilder
                 .Select(name => KeyValuePair.Create(name, (JsonNode?)$"{context.Secrets[name]} v{context.SecretVersions[name]}"))),
             ["changedFiles"] = ansible.ChangedFiles is { } files ? new JsonArray(files.Select(f => (JsonNode?)f).ToArray()) : null,
         };
+        if (ansible.Peers is { } peers)
+            manifest["peers"] = peers.DeepClone();
+        return manifest;
     }
 
     /// <summary>The keys a step of a rotation works with. Removal names each by fingerprint, for the guest's OpenSSH to compare.</summary>

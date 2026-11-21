@@ -1,0 +1,19 @@
+{
+  "exitCode": 0,
+  "failedTask": null,
+  "recap": {
+    "changed": 0,
+    "failures": 0,
+    "ignored": 0,
+    "ok": 2,
+    "rescued": 0,
+    "skipped": 0,
+    "unreachable": 0
+  },
+  "reports": {
+    "certificate_sha256": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    "cluster_role": "primary"
+  },
+  "tasks": 2,
+  "unreachableTask": null
+}

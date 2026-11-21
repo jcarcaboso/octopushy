@@ -290,6 +290,11 @@ public sealed class WorkflowReader
             }
         }
 
+        var reports = ReadReports(json, manages, stages, Invalid);
+        var peers = json["peers"]?.GetValue<string>();
+        if (peers is not null && (!WorkflowKinds.IsMachine(manages) || ansible.Count == 0))
+            Invalid("/peers", "peers are for the setup stage of a workflow with manages: vm or manages: container, and this workflow has none.");
+
         return new WorkflowDefinition(
             id,
             version,
@@ -309,7 +314,45 @@ public sealed class WorkflowReader
             Valid = errors == 0,
             Schema = schema,
             SchemaJson = schemaJson,
+            Reports = reports,
+            Peers = peers,
         };
+    }
+
+    /// <summary>
+    /// <c>reports</c>: what a setup stage's playbooks may hand back. Only a guest's setup stage reports, since what it reports
+    /// came over that guest's pinned host key; a pattern is required, so a value a repository's code produces is constrained.
+    /// </summary>
+    private static Dictionary<string, WorkflowReport> ReadReports(JsonObject json, string manages, List<WorkflowStage> stages, Action<string, string> invalid)
+    {
+        var result = new Dictionary<string, WorkflowReport>(StringComparer.Ordinal);
+        if (json["reports"] is not JsonObject declared)
+            return result;
+        if (!WorkflowKinds.IsMachine(manages) || !stages.Skip(1).Any(s => s.Executor == Executors.Ansible))
+        {
+            invalid("/reports", "reports are for the setup stage of a workflow with manages: vm or manages: container, and this workflow has none.");
+            return result;
+        }
+
+        foreach (var (name, node) in declared)
+        {
+            var pattern = node!["pattern"]!.GetValue<string>();
+            try
+            {
+                // The pattern alone, so it cannot close the anchors' group, and as it is matched.
+                _ = new System.Text.RegularExpressions.Regex(pattern, System.Text.RegularExpressions.RegexOptions.CultureInvariant, WorkflowReport.MatchTimeout);
+                _ = WorkflowReport.Whole(pattern);
+            }
+            catch (ArgumentException e)
+            {
+                invalid($"/reports/{name}/pattern", $"The pattern of report {name} is not a valid regular expression: {e.Message}");
+                continue;
+            }
+
+            result[name] = new WorkflowReport(name, node["description"]?.GetValue<string>(), pattern);
+        }
+
+        return result;
     }
 
     /// <summary>

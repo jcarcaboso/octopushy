@@ -16,3 +16,6 @@ What the real tools printed for the inputs in `contracts/agent/v1/examples`, whi
   `octopushy-recap: `, of a playbook run on the agent with `-c local`: one that changed a file and
   skipped a task, and one that reported the declared outcome `deferred` as the example lab's
   `tasks/activity.yml` does.
+- `recap-reports.json`: the same line from a playbook that reported `certificate_sha256` and
+  `cluster_role` with `set_stats` as `octopushy_reports`, recorded with ansible-core 2.21.5 and
+  `-c local` on November 21, 2026.

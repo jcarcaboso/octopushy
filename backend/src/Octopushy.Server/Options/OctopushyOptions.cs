@@ -223,7 +223,7 @@ public sealed class ToolOptions
     public string OpenTofuImage { get; set; } = "ghcr.io/opentofu/opentofu:1.13.1";
 
     /// <summary>Its tag names the content of agent/ansible; scripts/checks/offline.sh keeps this up to date.</summary>
-    public string AnsibleImage { get; set; } = "docker.io/skorcius/octopushy:ansible-2.21.5-7bed712c011c";
+    public string AnsibleImage { get; set; } = "docker.io/skorcius/octopushy:ansible-2.21.5-55176118cb4a";
 }
 
 public sealed class SchedulingOptions

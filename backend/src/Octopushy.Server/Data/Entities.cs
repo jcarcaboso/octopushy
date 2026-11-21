@@ -762,6 +762,19 @@ public sealed class GuestConfiguration
     /// until first recorded.
     /// </summary>
     public string? SecretVersions { get; set; }
+
+    /// <summary>
+    /// JSON: what this guest's own setup playbooks reported, by report name, each with the address its run connected to, the
+    /// run and when. Only names its workflow declares, matching their patterns. Cleared when its machine is created or replaced.
+    /// See <see cref="Orchestration.GuestReports"/>.
+    /// </summary>
+    public string? Reports { get; set; }
+
+    /// <summary>
+    /// JSON: what this guest's peers had reported when its onChange action was last started, as that run got it. A different
+    /// value starts that action once. Null until first recorded.
+    /// </summary>
+    public string? PeerReports { get; set; }
 }
 
 public static class Operations
@@ -789,6 +802,9 @@ public static class RunReasons
 
     /// <summary>A store value the guest's setup names changed its active version.</summary>
     public const string Secret = "secret";
+
+    /// <summary>A guest this guest's workflow names among its peers reported a new value: see <see cref="Orchestration.GuestReports"/>.</summary>
+    public const string Peer = "peer";
 }
 
 public static class RunStatuses

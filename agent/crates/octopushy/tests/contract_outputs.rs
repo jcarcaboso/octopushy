@@ -245,6 +245,7 @@ async fn ansible_outputs_are_the_examples() {
     for (recap, variant) in [
         ("recap.json", None),
         ("recap-outcome.json", Some("outcome")),
+        ("recap-reports.json", Some("reports")),
     ] {
         std::fs::write(dir.path().join("recap.json"), recorded(recap)).unwrap();
         let ran = exec(

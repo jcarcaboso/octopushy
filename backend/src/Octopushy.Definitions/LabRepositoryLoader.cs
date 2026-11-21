@@ -846,6 +846,14 @@ public sealed partial class LabRepositoryLoader
             Invalid("/secrets", $"{name} is set more than once in inputs, secrets and secretFiles.");
         }
 
+        // What approving an outcome sets is a person's decision on one run: a guest that set it itself would skip that person.
+        var approved = configure.Outcomes.Values.SelectMany(o => o.ApproveVars?.Select(v => v.Key) ?? []).ToHashSet(StringComparer.Ordinal);
+        foreach (var (field, name) in inputs.Select(n => ("inputs", n)).Concat(secrets.Keys.Select(n => ("secrets", n)))
+                     .Concat(files.Keys.Select(n => ("secretFiles", n))).Where(p => approved.Contains(p.Item2)))
+        {
+            Invalid($"/{field}", $"{field}.{name} is what approving an outcome of {workflow.Label} sets, so a guest cannot set it.");
+        }
+
         // A token that can write to Proxmox is not an input to a playbook, and neither is one
         // that can read it: an installation's credentials go to its API and nowhere else.
         var connectionKeys = ConnectionKeys(installations);

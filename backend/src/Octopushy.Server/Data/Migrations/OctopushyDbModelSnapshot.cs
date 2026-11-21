@@ -699,9 +699,17 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("desired_revision_id");
 
+                    b.Property<string>("PeerReports")
+                        .HasColumnType("text")
+                        .HasColumnName("peer_reports");
+
                     b.Property<string>("ProposedHash")
                         .HasColumnType("text")
                         .HasColumnName("proposed_hash");
+
+                    b.Property<string>("Reports")
+                        .HasColumnType("text")
+                        .HasColumnName("reports");
 
                     b.Property<string>("SecretVersions")
                         .HasColumnType("jsonb")
