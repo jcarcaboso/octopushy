@@ -357,6 +357,35 @@ public class ServiceDefinitionTests
     }
 
     [Theory]
+    [InlineData("{ id: home-assistant }")]
+    [InlineData("{ id: home-assistant, name: Home Assistant }")]
+    public void A_group_is_display_metadata_and_does_not_change_the_service_hash(string group)
+    {
+        using var test = Repository();
+        var before = Hash(test);
+        test.Write(ServiceFile, Service + $"\ngroup: {group}\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.True(repository.IsValid(Address), Errors(test));
+        Assert.Equal(before, Hash(test));
+    }
+
+    [Theory]
+    [InlineData("home-assistant")]
+    [InlineData("{ name: Home Assistant }")]
+    [InlineData("{ id: Home Assistant }")]
+    [InlineData("{ id: home-assistant, name: \"\" }")]
+    [InlineData("{ id: home-assistant, name: \"   \" }")]
+    [InlineData("{ id: home-assistant, name: \" Home Assistant \" }")]
+    [InlineData("{ id: home-assistant, name: \"Home\\nAssistant\" }")]
+    [InlineData("{ id: home-assistant, name: [one, two] }")]
+    public void A_group_requires_an_id_and_allows_a_non_blank_name(string value)
+    {
+        using var test = Repository();
+        test.Write(ServiceFile, Service + $"\ngroup: {value}\n");
+        Assert.Contains("group", Errors(test));
+    }
+
+    [Theory]
     [InlineData("ftp://web.lab.test/")]
     [InlineData("https://web.lab.test/a b")]
     [InlineData("web.lab.test")]

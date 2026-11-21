@@ -7,6 +7,20 @@
   "properties": {
     "schemaVersion": { "$ref": "common.schema.json#/$defs/schemaVersion" },
     "description": { "type": "string" },
+    "group": {
+      "description": "Optional Services page section. Services with the same id share a section across guests and domains. Only one member needs to set its name. Changing it runs nothing.",
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/id" },
+        "name": {
+          "type": "string",
+          "maxLength": 80,
+          "pattern": "^\\S(?:[^\\r\\n]*\\S)?(?![\\s\\S])"
+        }
+      },
+      "required": ["id"],
+      "additionalProperties": false
+    },
     "links": {
       "description": "Where people open the service, such as https://vault.example.com/, or tcp://host:port for one that does not speak HTTP, such as a database. The Inventory shows them, and an agent checks each one answers: an HTTP status, or a TCP connection that opens. Changing them runs nothing. See docs/uptime.md.",
       "type": "array",

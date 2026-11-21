@@ -29,8 +29,7 @@ function storeView(view: View) {
 }
 
 /** The domain with its first label in full and the rest muted. */
-function DomainName({ domain }: { domain: string | null }) {
-  if (domain === null) return <span>No domain</span>;
+function DomainName({ domain }: { domain: string }) {
   const dot = domain.indexOf(".");
   return (
     <span className="mono">
@@ -41,13 +40,13 @@ function DomainName({ domain }: { domain: string | null }) {
 }
 
 function Section({ group, view, open, onToggle }: { group: LinkGroup; view: View; open: boolean; onToggle: () => void }) {
-  const label = group.domain ?? "No domain";
+  const label = group.label ?? "No domain";
   const down = group.links.filter((l) => l.check?.status === "down").length;
   return (
     <section className="runs-section" aria-label={label}>
       <button type="button" className="runs-section__summary services-section__toggle" aria-expanded={open} onClick={onToggle}>
         <ChevronRight className="runs-section__chevron" size={14} aria-hidden="true" />
-        <DomainName domain={group.domain} />
+        {group.domain === null ? <span>{label}</span> : <DomainName domain={group.domain} />}
         <span className="runs-section__count">{group.links.length}</span>
         {down > 0 ? <span className="services-down services-section__down">{down} down</span> : null}
       </button>
@@ -115,7 +114,7 @@ export function ServicesPage() {
           <div className="services__inner">
             {view === "list" ? <LinkHead /> : null}
             {shown.map((group) => {
-              const key = group.domain ?? "";
+              const key = group.key;
               return (
                 <Section
                   key={key}

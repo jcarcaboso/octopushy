@@ -18,6 +18,7 @@ public class UptimeTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
     private const string Linked = """
         schemaVersion: 1
         workflow: web@1
+        group: { id: home-assistant, name: Home Assistant }
         links:
           - https://web.lab.test/health?full=1
           - http://web.lab.test:8080/
@@ -305,7 +306,7 @@ public class UptimeTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
     }
 
     [Fact]
-    public async Task The_inventory_lists_links_unmanaged_guests_host_endpoints_and_guest_addresses()
+    public async Task The_inventory_lists_service_links_and_groups_and_guest_and_host_addresses()
     {
         var (server, _, _) = await StartAsync(postgres);
         await using var _ = server;
@@ -318,6 +319,8 @@ public class UptimeTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
         Assert.Equal("10.1.0.31", guest["accessAddress"]!.GetValue<string>());
         var service = guest["services"]![0]!;
         Assert.Equal("web", service["name"]!.GetValue<string>());
+        Assert.Equal("home-assistant", service["group"]!["id"]!.GetValue<string>());
+        Assert.Equal("Home Assistant", service["group"]!["name"]!.GetValue<string>());
         Assert.Equal(["https://web.lab.test/health?full=1", "http://web.lab.test:8080/"], service["links"]!.AsArray().Select(l => l!.GetValue<string>()));
     }
 
@@ -334,6 +337,7 @@ public class UptimeTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
 
         var client = await server.SignedInClientAsync();
         var service = (await client.GetFromJsonAsync<JsonObject>("/api/inventory"))!["labs"]![0]!["installations"]![0]!["guests"]![0]!["services"]![0]!;
+        Assert.Null(service["group"]);
         Assert.Equal(["https://web.example.com/"], service["links"]!.AsArray().Select(l => l!.GetValue<string>()));
         var name = Assert.Single(service["names"]!.AsArray())!;
         Assert.Equal("web.example.com", name["name"]!.GetValue<string>());

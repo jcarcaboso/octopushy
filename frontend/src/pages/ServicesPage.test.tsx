@@ -43,6 +43,28 @@ describe("Services", () => {
     expect(screen.getByRole("list", { name: "No domain" })).toBeVisible();
   });
 
+  it("shows a configured group across guests and hosts in both views", async () => {
+    const user = userEvent.setup();
+    const id = "home-assistant";
+    const name = "Home Assistant";
+    show(inventoryOf([
+      guest("automation", [service("zigbee2mqtt", ["https://zigbee.home.example.org/"], { group: { id, name } })]),
+      guest("data", [service("postgres", ["tcp://10.0.0.3:5432"], { group: { id, name: null } })]),
+      guest("web", [service("traefik", ["https://traefik.home.example.org/"])]),
+      guest("dns", [service("technitium", ["http://10.0.0.21:5380/"])]),
+    ]));
+    const rows = await screen.findByRole("list", { name });
+    expect(within(rows).getByRole("link", { name: "zigbee2mqtt" })).toBeVisible();
+    expect(within(rows).getByRole("link", { name: "postgres" })).toBeVisible();
+    expect(within(screen.getByRole("list", { name: "home.example.org" })).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(screen.getByRole("list", { name: "No domain" })).getAllByRole("listitem")).toHaveLength(1);
+
+    await user.type(screen.getByRole("searchbox", { name: "Find a service" }), "home assistant");
+    expect(screen.getAllByRole("list")).toEqual([rows]);
+    await user.click(screen.getByRole("button", { name: "Tiles" }));
+    expect(within(screen.getByRole("list", { name })).getAllByRole("listitem")).toHaveLength(2);
+  });
+
   it("shows a down link and counts it on its section", async () => {
     show();
     const section = await screen.findByRole("region", { name: "home.example.org" });

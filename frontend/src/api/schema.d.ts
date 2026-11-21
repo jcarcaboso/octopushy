@@ -2400,6 +2400,10 @@ export interface components {
             runs: components["schemas"]["RunSummaryDto"][];
             appliedDefinitionText?: null | string;
         };
+        ServiceGroupDto: {
+            id: string;
+            name: null | string;
+        };
         ServiceIconChoice: {
             name: string;
         };
@@ -2427,6 +2431,7 @@ export interface components {
             activeRun: null | components["schemas"]["RunSummaryDto"];
             lastRun: null | components["schemas"]["RunSummaryDto"];
             workflow: null | components["schemas"]["WorkflowDto"];
+            group: null | components["schemas"]["ServiceGroupDto"];
             links: string[];
             names: components["schemas"]["ServiceNameDto"][];
             icon: null | components["schemas"]["ServiceIconDto"];
