@@ -45,6 +45,62 @@ public class AttachedGuestDefinitionTests
         Assert.Contains(errors, i => i.Message.Contains("so it needs access.hostKey"));
     }
 
+    /// <summary>The minimal fixture, whose workflow's inputs schema requires hardware and network, as proxmox-vm's does.</summary>
+    private static TestRepository RequiringHardwareAndNetwork()
+    {
+        var test = TestRepository.Minimal();
+        Replace(test, "workflows/test-vm/workflow.yaml", "manages: vm\n", "manages: vm\ninputs: inputs.schema.json\n");
+        test.Write("workflows/test-vm/inputs.schema.json", """
+            {
+              "type": "object",
+              "properties": {
+                "hardware": {
+                  "type": "object",
+                  "properties": { "cores": { "type": "integer", "minimum": 1 }, "memory": { "type": "integer" } },
+                  "required": ["cores", "memory"],
+                  "additionalProperties": false
+                },
+                "network": { "type": "object", "required": ["bridge", "mode"] },
+                "inputs": { "type": "object", "additionalProperties": false }
+              },
+              "required": ["hardware", "network"]
+            }
+            """);
+        Replace(test, GuestFile, "hardware: { cores: 2, memory: 2048 }\n", "");
+        Replace(test, GuestFile, "network: { bridge: vmbr0, mode: static, address: 10.1.0.31/24, gateway: 10.1.0.1 }\n", "");
+        return test;
+    }
+
+    [Fact]
+    public void An_attached_guest_may_leave_out_hardware_and_network_which_no_machine_stage_reads()
+    {
+        using var test = RequiringHardwareAndNetwork();
+        Replace(test, GuestFile, "type: vm\n", "type: vm\nmachine: attached\n");
+
+        Assert.Empty(Errors(LabRepositoryLoader.Load(test.Root)));
+    }
+
+    [Fact]
+    public void An_attached_guest_still_has_the_hardware_it_writes_checked()
+    {
+        using var test = RequiringHardwareAndNetwork();
+        Replace(test, GuestFile, "type: vm\n", "type: vm\nmachine: attached\nhardware: { cores: 0, memory: 2048 }\n");
+        var errors = Errors(LabRepositoryLoader.Load(test.Root));
+
+        Assert.Single(errors);
+        Assert.Equal(IssueSources.WorkflowSchema, errors[0].Source);
+    }
+
+    [Fact]
+    public void A_managed_guest_still_needs_the_hardware_and_network_its_workflow_requires()
+    {
+        using var test = RequiringHardwareAndNetwork();
+        var errors = Errors(LabRepositoryLoader.Load(test.Root));
+
+        Assert.NotEmpty(errors);
+        Assert.All(errors, e => Assert.Equal(IssueSources.WorkflowSchema, e.Source));
+    }
+
     [Fact]
     public void Machine_is_managed_or_attached()
     {

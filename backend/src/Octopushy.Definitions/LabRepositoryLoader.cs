@@ -782,17 +782,11 @@ public sealed partial class LabRepositoryLoader
             }
         }
 
-        if (guest.Workflow?.Schema is { } schema)
+        if (guest.Workflow is { } workflow)
         {
-            var instance = new JsonObject
+            foreach (var error in workflow.EvaluateGuest(guest.Json))
             {
-                ["hardware"] = guest.Json["hardware"]?.DeepClone(),
-                ["network"] = guest.Json["network"]?.DeepClone(),
-                ["inputs"] = guest.Json["inputs"]?.DeepClone() ?? new JsonObject(),
-            };
-            foreach (var error in SchemaCatalog.Evaluate(schema, instance))
-            {
-                Error(guest.File, LineOf(guest.File, error.Pointer), $"{DefinitionFiles.Describe(error.Pointer)}{error.Message} (workflow {guest.Workflow.Label})", guest.Address,
+                Error(guest.File, LineOf(guest.File, error.Pointer), $"{DefinitionFiles.Describe(error.Pointer)}{error.Message} (workflow {workflow.Label})", guest.Address,
                     IssueSources.WorkflowSchema);
             }
         }
