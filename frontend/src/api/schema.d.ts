@@ -1189,6 +1189,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/variables/purge-exclusion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["setVariablePurgeExclusion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/variables/reveal": {
         parameters: {
             query?: never;
@@ -2670,6 +2686,7 @@ export interface components {
             lines: null | number;
             /** Format: int32 */
             newerVersion: null | number;
+            purgeExcluded: boolean;
         };
         VariablePromotionRequest: {
             key: string;
@@ -2682,6 +2699,10 @@ export interface components {
         VariablePurgeDto: {
             deleted: string[];
             kept: components["schemas"]["KeptVariableDto"][];
+        };
+        VariablePurgeExclusionRequest: {
+            key: string;
+            excluded: boolean;
         };
         VariablePurgeRequest: {
             keys: string[];
@@ -7180,6 +7201,55 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["VariablePurgeDto"];
                 };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    setVariablePurgeExclusion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VariablePurgeExclusionRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Bad Request */
             400: {

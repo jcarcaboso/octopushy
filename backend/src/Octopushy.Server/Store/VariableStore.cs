@@ -245,6 +245,16 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         await SaveAsync(cancellationToken);
     }
 
+    /// <summary>Keeps the key out of every purge, or lets a purge delete it again. Its value and versions are untouched.</summary>
+    public async Task ExcludeFromPurgeAsync(string key, bool excluded, CancellationToken cancellationToken)
+    {
+        CheckUserKey(key);
+        var entry = await db.StoreEntries.FirstOrDefaultAsync(e => e.Key == key, cancellationToken)
+            ?? throw new StoreException($"There is no entry '{key}'.");
+        entry.PurgeExcluded = excluded;
+        await SaveAsync(cancellationToken);
+    }
+
     /// <summary>The current value and version, for the server's own use.</summary>
     public async Task<(string Value, int Version)?> GetAsync(string key, CancellationToken cancellationToken)
     {

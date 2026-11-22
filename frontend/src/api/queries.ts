@@ -732,6 +732,15 @@ export function usePurgeVariables() {
   });
 }
 
+/** Keeps a key out of every purge, or lets a purge delete it again. */
+export function useSetPurgeExclusion() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { key: string; excluded: boolean }) => unwrap(api.POST("/api/variables/purge-exclusion", { body })),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.variables }),
+  });
+}
+
 export function useUpdateRepository() {
   const client = useQueryClient();
   return useMutation({

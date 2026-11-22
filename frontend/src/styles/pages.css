@@ -2676,6 +2676,107 @@
   padding-left: var(--space-5);
 }
 
+.purge-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.purge-toolbar .vars-search {
+  flex: 1;
+  min-width: 12rem;
+}
+
+.purge-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.purge-group__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.purge-group__head input {
+  margin: 0;
+}
+
+.purge-group__name {
+  flex: 1;
+  font-weight: 600;
+}
+
+.purge-group__count,
+.purge-row__meta,
+.purge-summary {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.purge-summary {
+  margin-right: auto;
+  font-size: var(--text-sm);
+}
+
+.purge-group__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.purge-row {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-2) 2.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.purge-row:hover {
+  background: var(--surface-2);
+}
+
+.purge-row > label {
+  cursor: pointer;
+  min-width: 0;
+}
+
+.purge-row--off .purge-key {
+  opacity: 0.55;
+}
+
+.purge-row--excluded {
+  background: color-mix(in srgb, var(--info-bg) 50%, transparent);
+}
+
+.purge-row--excluded .purge-key {
+  color: var(--text-muted);
+}
+
+.purge-row__shield {
+  margin-top: 0.2rem;
+  color: var(--info-fg);
+}
+
+.purge-row__exclude {
+  color: var(--text-muted);
+}
+
+.purge-key {
+  overflow-wrap: anywhere;
+}
+
+.purge-key__dir {
+  color: var(--text-faint);
+}
+
 .agent-detail {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr);
@@ -3374,7 +3475,8 @@ a.service-tile:hover {
   border-color: var(--focus);
 }
 
-.vars .vars-search input[type="search"] {
+.vars .vars-search input[type="search"],
+.purge-toolbar .vars-search input[type="search"] {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;

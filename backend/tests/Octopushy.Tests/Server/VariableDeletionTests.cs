@@ -94,6 +94,34 @@ public class VariableDeletionTests(PostgresFixture postgres) : IClassFixture<Pos
     }
 
     [Fact]
+    public async Task A_secret_excluded_from_purge_is_kept_until_it_is_included_again()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres);
+        using var client = await SignInAsync(server);
+        await server.SyncAndTrustAsync(client);
+        const string Spare = "old/spare-token";
+        await server.SetSecretAsync(Spare, "a token kept for later");
+
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsJsonAsync("/api/variables/purge-exclusion", new { key = Spare, excluded = true })).StatusCode);
+        var list = await client.GetFromJsonAsync<JsonObject>("/api/variables");
+        Assert.True(list!["entries"]!.AsArray().Single(v => v!["key"]!.GetValue<string>() == Spare)!["purgeExcluded"]!.GetValue<bool>());
+
+        // A client that still sends the key, such as one opened before the exclusion, does not purge it.
+        var body = (await (await client.PostAsJsonAsync("/api/variables/purge", new { keys = new[] { Spare } })).Content.ReadFromJsonAsync<JsonObject>())!;
+        Assert.Empty(body["deleted"]!.AsArray());
+        Assert.Equal($"'{Spare}' is excluded from purge. Include it again to purge it.", body["kept"]![0]!["reason"]!.GetValue<string>());
+        Assert.True(await server.QueryAsync(db => db.StoreEntries.AnyAsync(e => e.Key == Spare)));
+
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsJsonAsync("/api/variables/purge-exclusion", new { key = Spare, excluded = false })).StatusCode);
+        body = (await (await client.PostAsJsonAsync("/api/variables/purge", new { keys = new[] { Spare } })).Content.ReadFromJsonAsync<JsonObject>())!;
+        Assert.Equal([Spare], body["deleted"]!.AsArray().Select(k => k!.GetValue<string>()));
+
+        // Only an operator key that exists can be excluded.
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/variables/purge-exclusion", new { key = Spare, excluded = true })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/variables/purge-exclusion", new { key = "system/anything", excluded = true })).StatusCode);
+    }
+
+    [Fact]
     public async Task Deleting_is_refused_while_a_definition_at_the_branch_head_references_the_key()
     {
         await using var server = await ServerHarness.StartAsync(postgres);
