@@ -378,7 +378,7 @@ fn handle(
         }
         Some(In::ResultAck(ack)) => {
             tracing::debug!(attempt = %ack.attempt_id, "result acknowledged");
-            agent.manager.ack(&ack.attempt_id);
+            agent.manager.ack_in_background(&ack.attempt_id);
         }
         Some(In::Welcome(w)) => {
             agent.manager.set_concurrency(w.max_concurrency.max(1));

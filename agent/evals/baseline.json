@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "agent_version": "0.11.0",
-  "git": "1394759-dirty",
+  "git": "68346e8-dirty",
   "runs": 5,
   "host": {
     "cpus": 8,
@@ -11,115 +11,115 @@
   },
   "metrics": {
     "burst.attempts_per_s": {
-      "value": 102.46,
+      "value": 799.926,
       "unit": "per s",
       "better": "higher",
       "tolerance": 0.25,
       "slack": 0.0,
       "samples": [
-        92.791,
-        100.225,
-        103.159,
-        107.06,
-        102.46
+        799.926,
+        715.792,
+        854.637,
+        768.551,
+        813.114
       ]
     },
     "burst.cpu_ms_per_attempt": {
-      "value": 2.227,
+      "value": 2.5,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 2.0,
       "samples": [
-        2.227,
-        2.296,
-        2.178,
-        2.196,
-        2.277
+        2.5,
+        2.369,
+        2.598,
+        2.471,
+        2.504
       ]
     },
     "burst.messages_per_attempt": {
-      "value": 3.297,
+      "value": 4.141,
       "unit": "count",
       "better": "lower",
       "tolerance": 0.15,
       "slack": 1.0,
       "samples": [
-        3.234,
-        3.297,
-        3.203,
-        3.328,
-        3.359
+        4.141,
+        4.078,
+        4.156,
+        4.047,
+        4.188
       ]
     },
     "burst.peak_rss_growth_mib": {
-      "value": 0.0,
+      "value": 0.047,
       "unit": "MiB",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 8.0,
       "samples": [
-        1.391,
-        0.02,
-        0.0,
-        0.0,
-        0.0
+        3.414,
+        0.195,
+        0.047,
+        0.035,
+        0.016
       ]
     },
     "burst.wall_ms": {
-      "value": 624.637,
+      "value": 80.007,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 2.0,
       "samples": [
-        689.723,
-        638.562,
-        620.404,
-        597.797,
-        624.637
+        80.007,
+        89.411,
+        74.886,
+        83.274,
+        78.71
       ]
     },
     "burst.wire_bytes_per_attempt": {
-      "value": 1590.438,
+      "value": 1603.016,
       "unit": "bytes",
       "better": "lower",
       "tolerance": 0.15,
       "slack": 256.0,
       "samples": [
-        1589.516,
-        1590.438,
-        1589.047,
-        1590.906,
-        1591.391
+        1603.016,
+        1602.141,
+        1603.281,
+        1601.688,
+        1603.734
       ]
     },
     "burst_disconnects.attempts_per_s": {
-      "value": 24.579,
+      "value": 27.597,
       "unit": "per s",
       "better": "higher",
       "tolerance": 0.4,
       "slack": 0.0,
       "samples": [
-        28.133,
-        19.846,
-        20.809,
-        24.579,
-        28.123
+        28.463,
+        32.709,
+        27.597,
+        26.051,
+        25.148
       ]
     },
     "burst_disconnects.cpu_ms_per_attempt": {
-      "value": 2.077,
+      "value": 2.468,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 2.0,
       "samples": [
-        2.001,
-        2.2,
-        2.077,
-        2.043,
-        2.145
+        2.552,
+        2.468,
+        2.555,
+        2.34,
+        2.428
       ]
     },
     "burst_disconnects.disconnects_hit": {
@@ -137,213 +137,213 @@
       ]
     },
     "burst_disconnects.duplicate_results": {
-      "value": 55.0,
+      "value": 0.0,
       "unit": "count",
       "better": "lower",
       "tolerance": 0.15,
       "slack": 1.0,
       "samples": [
-        55.0,
-        55.0,
-        53.0,
-        55.0,
-        55.0
-      ]
-    },
-    "burst_disconnects.peak_rss_growth_mib": {
-      "value": 0.0,
-      "unit": "MiB",
-      "better": "lower",
-      "tolerance": 0.3,
-      "slack": 8.0,
-      "samples": [
-        0.59,
-        0.102,
+        0.0,
+        0.0,
         0.0,
         0.0,
         0.0
       ]
     },
+    "burst_disconnects.peak_rss_growth_mib": {
+      "value": 0.031,
+      "unit": "MiB",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 8.0,
+      "samples": [
+        1.285,
+        0.391,
+        0.031,
+        0.012,
+        0.004
+      ]
+    },
     "burst_disconnects.wall_ms": {
-      "value": 2603.89,
+      "value": 2319.124,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.45,
       "slack": 50.0,
       "samples": [
-        2274.926,
-        3224.873,
-        3075.587,
-        2603.89,
-        2275.687
+        2248.518,
+        1956.652,
+        2319.124,
+        2456.758,
+        2544.916
       ]
     },
     "drain.shutdown_ms": {
-      "value": 182.568,
+      "value": 28.118,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 2.0,
       "samples": [
-        182.568,
-        205.632,
-        182.579,
-        168.98,
-        178.403
+        19.976,
+        29.606,
+        28.247,
+        16.499,
+        28.118
       ]
     },
     "log_pipeline.cpu_us_per_line": {
-      "value": 2.9,
+      "value": 2.89,
       "unit": "us",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 0.05,
       "samples": [
-        2.905,
-        2.9,
         2.898,
-        2.887,
-        2.9
+        2.889,
+        2.889,
+        2.918,
+        2.89
       ]
     },
     "log_pipeline.drain_retained_ms": {
-      "value": 24.046,
+      "value": 24.189,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 1.0,
       "samples": [
-        24.101,
-        24.046,
-        23.893,
-        23.965,
-        24.11
+        24.245,
+        24.178,
+        24.189,
+        24.542,
+        24.143
       ]
     },
     "log_pipeline.lines_per_s": {
-      "value": 344227.55,
+      "value": 345422.934,
       "unit": "per s",
       "better": "higher",
       "tolerance": 0.25,
       "slack": 0.0,
       "samples": [
-        343696.661,
-        344227.55,
-        343850.01,
-        345815.767,
-        344278.36
+        344517.641,
+        345623.375,
+        345577.437,
+        342022.372,
+        345422.934
       ]
     },
     "observe.to_result_p50_ms": {
-      "value": 15.866,
+      "value": 16.29,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 2.0,
       "samples": [
-        17.027,
-        16.696,
-        15.866,
-        15.663,
-        15.86
+        15.867,
+        16.29,
+        20.637,
+        17.017,
+        16.091
       ]
     },
     "observe.to_result_p95_ms": {
-      "value": 16.718,
+      "value": 18.583,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 2.0,
       "samples": [
-        18.069,
-        17.565,
-        16.718,
-        16.649,
-        16.619
+        16.592,
+        18.78,
+        91.795,
+        18.583,
+        17.065
       ]
     },
     "observe.to_started_p50_ms": {
-      "value": 11.27,
+      "value": 11.709,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 2.0,
       "samples": [
-        12.272,
-        12.123,
-        11.223,
-        11.194,
-        11.27
+        11.446,
+        11.709,
+        12.542,
+        12.098,
+        11.489
       ]
     },
     "outbox.get_ms": {
-      "value": 0.274,
+      "value": 0.275,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 0.5,
       "samples": [
-        0.274,
-        0.302,
         0.275,
-        0.273,
-        0.272
+        0.282,
+        0.272,
+        0.276,
+        0.275
       ]
     },
     "outbox.list_ms": {
-      "value": 0.109,
+      "value": 0.108,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 1.0,
       "samples": [
-        0.095,
-        0.113,
-        0.11,
-        0.103,
-        0.109
+        0.104,
+        0.152,
+        0.109,
+        0.101,
+        0.108
       ]
     },
     "outbox.put_ms": {
-      "value": 4.552,
+      "value": 4.514,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 0.5,
       "samples": [
-        4.552,
-        4.722,
-        4.683,
-        4.502,
-        4.355
+        4.281,
+        5.561,
+        4.434,
+        4.514,
+        4.55
       ]
     },
     "outbox.remove_ms": {
-      "value": 1.942,
+      "value": 1.905,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 0.5,
       "samples": [
-        2.062,
-        1.916,
-        1.995,
-        1.918,
-        1.942
+        1.92,
+        2.148,
+        1.905,
+        1.886,
+        1.811
       ]
     },
     "reconnect.to_hello_ms": {
-      "value": 616.9,
+      "value": 907.147,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.45,
       "slack": 50.0,
       "samples": [
-        985.433,
-        616.9,
-        579.95,
-        698.115,
-        611.159
+        998.62,
+        907.147,
+        614.829,
+        976.206,
+        557.726
       ]
     },
     "shutdown.idle_ms": {
@@ -353,81 +353,81 @@
       "tolerance": 0.3,
       "slack": 2.0,
       "samples": [
-        0.075,
-        0.071,
-        0.079,
-        0.054,
-        0.074
+        0.074,
+        0.07,
+        0.081,
+        0.072,
+        0.093
       ]
     },
     "startup.to_hello_ms": {
-      "value": 2.091,
+      "value": 2.076,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 2.0,
       "samples": [
-        1.944,
-        2.125,
-        2.191,
-        1.973,
-        2.091
+        2.076,
+        2.034,
+        2.109,
+        1.992,
+        2.115
       ]
     },
     "tool_log.cpu_ms": {
-      "value": 32.406,
+      "value": 32.496,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 2.0,
       "samples": [
-        33.832,
-        32.57,
-        32.406,
-        31.462,
-        32.149
+        33.384,
+        31.661,
+        32.743,
+        31.428,
+        32.496
       ]
     },
     "tool_log.lines_per_s": {
-      "value": 433632.69,
+      "value": 515292.437,
       "unit": "per s",
       "better": "higher",
       "tolerance": 0.25,
       "slack": 0.0,
       "samples": [
-        433632.69,
-        419842.531,
-        423684.542,
-        448073.548,
-        437547.261
+        455566.254,
+        491549.784,
+        515292.437,
+        517947.556,
+        522544.958
       ]
     },
     "tool_log.messages": {
-      "value": 156.4,
+      "value": 156.8,
       "unit": "count",
       "better": "lower",
       "tolerance": 0.15,
       "slack": 1.0,
       "samples": [
-        159.6,
-        155.2,
+        155.4,
+        156.8,
+        158.8,
         156.4,
-        155.6,
-        160.2
+        159.8
       ]
     },
     "tool_log.wall_ms": {
-      "value": 34.591,
+      "value": 29.11,
       "unit": "ms",
       "better": "lower",
       "tolerance": 0.3,
       "slack": 2.0,
       "samples": [
-        34.591,
-        35.728,
-        35.404,
-        33.477,
-        34.282
+        32.926,
+        30.516,
+        29.11,
+        28.96,
+        28.706
       ]
     }
   },

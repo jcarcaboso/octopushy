@@ -47,6 +47,9 @@ enum State {
     Running,
     /// The result is in the outbox, waiting for `ResultAck`.
     Finished,
+    /// The server acknowledged the result; its files are being removed. Nothing of it is sent
+    /// again, and a draining agent waits for it.
+    Acknowledged,
 }
 
 struct Entry {
@@ -186,7 +189,7 @@ impl AttemptManager {
         let entries = self.entries.lock().unwrap();
         let mut active: Vec<(&u64, &String)> = entries
             .iter()
-            .filter(|(_, e)| e.state != State::Finished)
+            .filter(|(_, e)| matches!(e.state, State::Queued | State::Running))
             .map(|(id, e)| (&e.order, id))
             .collect();
         active.sort();
@@ -199,16 +202,16 @@ impl AttemptManager {
             .lock()
             .unwrap()
             .values()
-            .all(|e| e.state == State::Finished)
+            .all(|e| matches!(e.state, State::Finished | State::Acknowledged))
     }
 
-    /// Results waiting for acknowledgement.
+    /// Results waiting for acknowledgement, or acknowledged with their files not yet removed.
     pub fn unacknowledged(&self) -> usize {
         self.entries
             .lock()
             .unwrap()
             .values()
-            .filter(|e| e.state == State::Finished)
+            .filter(|e| matches!(e.state, State::Finished | State::Acknowledged))
             .count()
     }
 
@@ -225,7 +228,9 @@ impl AttemptManager {
         {
             let mut entries = self.entries.lock().unwrap();
             if let Some(existing) = entries.get_mut(&id) {
-                if existing.state == State::Finished {
+                if existing.state == State::Acknowledged {
+                    tracing::info!(attempt = %id, "ignoring an assignment whose result was acknowledged");
+                } else if existing.state == State::Finished {
                     tracing::info!(attempt = %id, "assignment received again; resending its result");
                     existing.resend_result = true;
                     self.wake.notify_one();
@@ -260,37 +265,56 @@ impl AttemptManager {
         );
 
         if !safe {
+            // Kept in memory only: nothing touches the disk.
             self.finish(
                 &id,
                 failed(&id, "the attempt ID is not usable as a file name"),
             );
             return;
         }
-        if self.draining.load(Ordering::SeqCst) {
-            logger.agent("the agent is shutting down; not starting this attempt");
-            self.finish(&id, failed(&id, "the agent is shutting down"));
-            return;
-        }
-        let ws = match workspace::create(
-            &self.work_dir,
-            &id,
-            &assignment.executor,
-            &assignment.action,
-            mutating,
-        ) {
-            Ok(ws) => ws,
-            Err(e) => {
-                let msg = format!("could not create the attempt workspace: {e:#}");
-                self.finish(&id, failed(&id, &logger.mask(&msg)));
-                return;
-            }
-        };
+        // Decided now: an assignment that arrives once the agent drains is refused.
+        let draining = self.draining.load(Ordering::SeqCst);
         let manager = self.clone();
         tokio::spawn(async move {
             manager
-                .run_attempt(assignment, ws, logger, cancel, snapshots)
+                .start(assignment, draining, mutating, logger, cancel, snapshots)
                 .await;
         });
+    }
+
+    /// Creates the workspace and its durable `queued` marker, then runs the attempt. Its disk
+    /// writes run on a blocking thread, off the connection's loop, so the fsyncs of attempts
+    /// accepted together overlap instead of queueing behind each other.
+    async fn start(
+        self: Arc<Self>,
+        assignment: Assignment,
+        draining: bool,
+        mutating: bool,
+        log: AttemptLogger,
+        cancel: CancellationToken,
+        snapshots: Snapshots,
+    ) {
+        let id = assignment.attempt_id.clone();
+        if draining {
+            log.agent("the agent is shutting down; not starting this attempt");
+            self.settle(&id, failed(&id, "the agent is shutting down"))
+                .await;
+            return;
+        }
+        let (work, ws_id) = (self.work_dir.clone(), id.clone());
+        let (executor, action) = (assignment.executor.clone(), assignment.action.clone());
+        let created =
+            blocking(move || workspace::create(&work, &ws_id, &executor, &action, mutating)).await;
+        let ws = match created {
+            Ok(ws) => ws,
+            Err(e) => {
+                let msg = format!("could not create the attempt workspace: {e:#}");
+                self.settle(&id, failed(&id, &log.mask(&msg))).await;
+                return;
+            }
+        };
+        self.run_attempt(assignment, ws, log, cancel, snapshots)
+            .await;
     }
 
     async fn run_attempt(
@@ -306,7 +330,7 @@ impl AttemptManager {
             biased;
             _ = cancel.cancelled() => {
                 log.agent("cancelled before it started");
-                self.finish(&id, result(&id, Outcome::Cancelled, "cancelled before it started"));
+                self.settle(&id, result(&id, Outcome::Cancelled, "cancelled before it started")).await;
                 return;
             }
             p = self.limiter.acquire() => p,
@@ -325,7 +349,7 @@ impl AttemptManager {
                     biased;
                     _ = cancel.cancelled() => {
                         log.agent("cancelled before it started");
-                        self.finish(&id, result(&id, Outcome::Cancelled, "cancelled before it started"));
+                        self.settle(&id, result(&id, Outcome::Cancelled, "cancelled before it started")).await;
                         return;
                     }
                     l = pool.lease(&assignment.executor) => l,
@@ -333,17 +357,19 @@ impl AttemptManager {
                 match lease {
                     Ok(lease) => lease,
                     Err(e) => {
-                        self.finish(&id, failed(&id, &format!("{e:#}")));
+                        self.settle(&id, failed(&id, &format!("{e:#}"))).await;
                         return;
                     }
                 }
             }
         };
-        if let Err(e) = workspace::mark_running(&ws) {
-            self.finish(
+        let marker = ws.clone();
+        if let Err(e) = blocking(move || workspace::mark_running(&marker)).await {
+            self.settle(
                 &id,
                 failed(&id, &format!("could not update the attempt marker: {e:#}")),
-            );
+            )
+            .await;
             return;
         }
         let mutating = {
@@ -454,7 +480,20 @@ impl AttemptManager {
             )),
         }
         drop(permit);
-        self.finish(&id, res);
+        self.settle(&id, res).await;
+    }
+
+    /// [`Self::finish`] on a blocking thread: it writes the result durably.
+    async fn settle(self: &Arc<Self>, id: &str, result: AttemptResult) {
+        let (manager, id) = (self.clone(), id.to_owned());
+        let finished = blocking(move || {
+            manager.finish(&id, result);
+            Ok(())
+        })
+        .await;
+        if let Err(e) = finished {
+            tracing::error!("storing an attempt's result: {e:#}");
+        }
     }
 
     /// Stores the result and marks the attempt finished.
@@ -513,7 +552,7 @@ impl AttemptManager {
             return;
         };
         match entry.state {
-            State::Finished => {}
+            State::Finished | State::Acknowledged => {}
             State::Queued => entry.cancel.cancel(),
             State::Running if entry.mutating && !force => {
                 entry.logger.agent(format!(
@@ -534,23 +573,51 @@ impl AttemptManager {
         }
     }
 
-    /// Handles `ResultAck`: forgets the attempt and deletes its files.
+    /// Handles `ResultAck`: forgets the attempt and deletes its files before it returns.
     pub fn ack(&self, id: &str) {
-        let removed = {
-            let mut entries = self.entries.lock().unwrap();
-            match entries.get(id) {
-                Some(e) if e.state != State::Finished => {
-                    tracing::warn!(attempt = %id, "acknowledgement for an attempt that has not finished");
-                    return;
-                }
-                Some(_) => entries.remove(id),
-                None => None,
-            }
-        };
-        let on_disk = removed.map(|e| e.on_disk).unwrap_or_else(|| is_safe_id(id));
-        if !on_disk {
-            return;
+        if let Some(on_disk) = self.begin_ack(id) {
+            self.remove_acknowledged(id, on_disk);
         }
+    }
+
+    /// Handles `ResultAck` as the connection's loop does: the files go on a blocking thread, so
+    /// the loop does not wait for their fsyncs. Until they are gone the attempt counts as
+    /// unacknowledged, so a draining agent waits for them, and nothing of it is sent again.
+    pub fn ack_in_background(self: &Arc<Self>, id: &str) {
+        if let Some(on_disk) = self.begin_ack(id) {
+            let (manager, id) = (self.clone(), id.to_owned());
+            tokio::task::spawn_blocking(move || manager.remove_acknowledged(&id, on_disk));
+        }
+    }
+
+    /// Marks a finished attempt acknowledged. Returns whether it has files to remove, or `None`
+    /// when there is nothing to do.
+    fn begin_ack(&self, id: &str) -> Option<bool> {
+        let mut entries = self.entries.lock().unwrap();
+        match entries.get_mut(id) {
+            Some(e) if e.state == State::Finished => {
+                e.state = State::Acknowledged;
+                Some(e.on_disk)
+            }
+            Some(e) if e.state == State::Acknowledged => None,
+            Some(_) => {
+                tracing::warn!(attempt = %id, "acknowledgement for an attempt that has not finished");
+                None
+            }
+            None => Some(is_safe_id(id)),
+        }
+    }
+
+    fn remove_acknowledged(&self, id: &str, on_disk: bool) {
+        if on_disk {
+            self.remove_files(id);
+        }
+        self.entries.lock().unwrap().remove(id);
+        // A draining connection checks again whether everything is acknowledged.
+        self.wake.notify_one();
+    }
+
+    fn remove_files(&self, id: &str) {
         // The marker and the record of a started change go first: a workspace
         // without them is discarded at startup, while either without an outbox
         // entry would be reported as an interrupted attempt. If they cannot be
@@ -564,7 +631,7 @@ impl AttemptManager {
             tracing::error!(attempt = %id, "{e:#}");
         }
         tracing::debug!(attempt = %id, "result acknowledged; removing the workspace");
-        tokio::task::spawn_blocking(move || workspace::remove(&ws));
+        workspace::remove(&ws);
     }
 
     /// Stops accepting work and cancels everything that may be cancelled.
@@ -598,6 +665,7 @@ impl AttemptManager {
             let mut entries = self.entries.lock().unwrap();
             entries
                 .iter_mut()
+                .filter(|(_, e)| e.state != State::Acknowledged)
                 .map(|(id, e)| {
                     // Once per connection for every attempt that started, so a
                     // Started lost with a dropped connection is repaired.
@@ -711,6 +779,13 @@ impl AttemptManager {
         }
         self.outbox.get(id)
     }
+}
+
+/// Runs blocking disk work on tokio's blocking pool.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| anyhow::anyhow!("a blocking task failed: {e}"))?
 }
 
 /// Leave 1 MiB for the AgentMessage envelope and future fields.
