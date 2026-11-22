@@ -36,6 +36,8 @@ to find when available.
   runs one backend test class. Server tests use Testcontainers and need a working
   Docker daemon or Podman API socket. They create disposable PostgreSQL containers.
 - `cd agent && cargo test --workspace --locked` runs the Rust tests.
+- `just agent-evals` measures the agent against `agent/evals/baseline.json` and checks
+  its resilience invariants under load; see `agent/evals/README.md` before performance work.
 - `cd frontend && pnpm test` runs the frontend tests.
 - `just check` runs static checks, builds and generated-contract drift checks.
 - `just openapi` regenerates the OpenAPI document and frontend client together.

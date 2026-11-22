@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use futures::StreamExt;
 use octopushy_proto::v1::{
     AgentMessage, DownloadImageRequest, EnrollRequest, EnrollResponse, ImageChunk, ImageUploaded,
     RenewCertificateRequest, RenewCertificateResponse, ResultAck, ServerMessage, Welcome,
@@ -456,7 +457,13 @@ impl FakeServer {
                 .tls_config(tls)
                 .unwrap()
                 .add_routes(Routes::from(router))
-                .serve_with_incoming(TcpListenerStream::new(listener))
+                // TCP_NODELAY, as Kestrel sets it: without it, Nagle and delayed ACKs add ~40 ms
+                // to small messages.
+                .serve_with_incoming(TcpListenerStream::new(listener).map(|s| {
+                    s.inspect(|s| {
+                        let _ = s.set_nodelay(true);
+                    })
+                }))
                 .await
                 .unwrap();
         });

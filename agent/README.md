@@ -28,6 +28,9 @@ cargo build --release          # target/release/octopushy and target/release/moc
 cargo test --workspace
 ```
 
+Performance evals: `just agent-evals` compares with [`evals/baseline.json`](evals/README.md)
+and fails on a regression or a broken invariant.
+
 No `protoc` is needed: the proto is compiled with `protox` (pure Rust). TLS is
 rustls with the `ring` provider everywhere; nothing links OpenSSL. The release
 profile uses LTO and strips symbols. The binary links glibc dynamically (a static

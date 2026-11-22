@@ -1,0 +1,612 @@
+{
+  "schema": 1,
+  "agent_version": "0.11.0",
+  "git": "1394759-dirty",
+  "runs": 5,
+  "host": {
+    "cpus": 8,
+    "cpu_model": "QEMU Virtual CPU version 2.5+",
+    "kernel": "7.3.4-200.fc44.x86_64",
+    "profile": "release"
+  },
+  "metrics": {
+    "burst.attempts_per_s": {
+      "value": 102.46,
+      "unit": "per s",
+      "better": "higher",
+      "tolerance": 0.25,
+      "slack": 0.0,
+      "samples": [
+        92.791,
+        100.225,
+        103.159,
+        107.06,
+        102.46
+      ]
+    },
+    "burst.cpu_ms_per_attempt": {
+      "value": 2.227,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 2.0,
+      "samples": [
+        2.227,
+        2.296,
+        2.178,
+        2.196,
+        2.277
+      ]
+    },
+    "burst.messages_per_attempt": {
+      "value": 3.297,
+      "unit": "count",
+      "better": "lower",
+      "tolerance": 0.15,
+      "slack": 1.0,
+      "samples": [
+        3.234,
+        3.297,
+        3.203,
+        3.328,
+        3.359
+      ]
+    },
+    "burst.peak_rss_growth_mib": {
+      "value": 0.0,
+      "unit": "MiB",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 8.0,
+      "samples": [
+        1.391,
+        0.02,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "burst.wall_ms": {
+      "value": 624.637,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 2.0,
+      "samples": [
+        689.723,
+        638.562,
+        620.404,
+        597.797,
+        624.637
+      ]
+    },
+    "burst.wire_bytes_per_attempt": {
+      "value": 1590.438,
+      "unit": "bytes",
+      "better": "lower",
+      "tolerance": 0.15,
+      "slack": 256.0,
+      "samples": [
+        1589.516,
+        1590.438,
+        1589.047,
+        1590.906,
+        1591.391
+      ]
+    },
+    "burst_disconnects.attempts_per_s": {
+      "value": 24.579,
+      "unit": "per s",
+      "better": "higher",
+      "tolerance": 0.4,
+      "slack": 0.0,
+      "samples": [
+        28.133,
+        19.846,
+        20.809,
+        24.579,
+        28.123
+      ]
+    },
+    "burst_disconnects.cpu_ms_per_attempt": {
+      "value": 2.077,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 2.0,
+      "samples": [
+        2.001,
+        2.2,
+        2.077,
+        2.043,
+        2.145
+      ]
+    },
+    "burst_disconnects.disconnects_hit": {
+      "value": 2.0,
+      "unit": "count",
+      "better": "higher",
+      "tolerance": 0.15,
+      "slack": 1.0,
+      "samples": [
+        2.0,
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ]
+    },
+    "burst_disconnects.duplicate_results": {
+      "value": 55.0,
+      "unit": "count",
+      "better": "lower",
+      "tolerance": 0.15,
+      "slack": 1.0,
+      "samples": [
+        55.0,
+        55.0,
+        53.0,
+        55.0,
+        55.0
+      ]
+    },
+    "burst_disconnects.peak_rss_growth_mib": {
+      "value": 0.0,
+      "unit": "MiB",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 8.0,
+      "samples": [
+        0.59,
+        0.102,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "burst_disconnects.wall_ms": {
+      "value": 2603.89,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.45,
+      "slack": 50.0,
+      "samples": [
+        2274.926,
+        3224.873,
+        3075.587,
+        2603.89,
+        2275.687
+      ]
+    },
+    "drain.shutdown_ms": {
+      "value": 182.568,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 2.0,
+      "samples": [
+        182.568,
+        205.632,
+        182.579,
+        168.98,
+        178.403
+      ]
+    },
+    "log_pipeline.cpu_us_per_line": {
+      "value": 2.9,
+      "unit": "us",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 0.05,
+      "samples": [
+        2.905,
+        2.9,
+        2.898,
+        2.887,
+        2.9
+      ]
+    },
+    "log_pipeline.drain_retained_ms": {
+      "value": 24.046,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 1.0,
+      "samples": [
+        24.101,
+        24.046,
+        23.893,
+        23.965,
+        24.11
+      ]
+    },
+    "log_pipeline.lines_per_s": {
+      "value": 344227.55,
+      "unit": "per s",
+      "better": "higher",
+      "tolerance": 0.25,
+      "slack": 0.0,
+      "samples": [
+        343696.661,
+        344227.55,
+        343850.01,
+        345815.767,
+        344278.36
+      ]
+    },
+    "observe.to_result_p50_ms": {
+      "value": 15.866,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 2.0,
+      "samples": [
+        17.027,
+        16.696,
+        15.866,
+        15.663,
+        15.86
+      ]
+    },
+    "observe.to_result_p95_ms": {
+      "value": 16.718,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 2.0,
+      "samples": [
+        18.069,
+        17.565,
+        16.718,
+        16.649,
+        16.619
+      ]
+    },
+    "observe.to_started_p50_ms": {
+      "value": 11.27,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 2.0,
+      "samples": [
+        12.272,
+        12.123,
+        11.223,
+        11.194,
+        11.27
+      ]
+    },
+    "outbox.get_ms": {
+      "value": 0.274,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 0.5,
+      "samples": [
+        0.274,
+        0.302,
+        0.275,
+        0.273,
+        0.272
+      ]
+    },
+    "outbox.list_ms": {
+      "value": 0.109,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 1.0,
+      "samples": [
+        0.095,
+        0.113,
+        0.11,
+        0.103,
+        0.109
+      ]
+    },
+    "outbox.put_ms": {
+      "value": 4.552,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 0.5,
+      "samples": [
+        4.552,
+        4.722,
+        4.683,
+        4.502,
+        4.355
+      ]
+    },
+    "outbox.remove_ms": {
+      "value": 1.942,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 0.5,
+      "samples": [
+        2.062,
+        1.916,
+        1.995,
+        1.918,
+        1.942
+      ]
+    },
+    "reconnect.to_hello_ms": {
+      "value": 616.9,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.45,
+      "slack": 50.0,
+      "samples": [
+        985.433,
+        616.9,
+        579.95,
+        698.115,
+        611.159
+      ]
+    },
+    "shutdown.idle_ms": {
+      "value": 0.074,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 2.0,
+      "samples": [
+        0.075,
+        0.071,
+        0.079,
+        0.054,
+        0.074
+      ]
+    },
+    "startup.to_hello_ms": {
+      "value": 2.091,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 2.0,
+      "samples": [
+        1.944,
+        2.125,
+        2.191,
+        1.973,
+        2.091
+      ]
+    },
+    "tool_log.cpu_ms": {
+      "value": 32.406,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 2.0,
+      "samples": [
+        33.832,
+        32.57,
+        32.406,
+        31.462,
+        32.149
+      ]
+    },
+    "tool_log.lines_per_s": {
+      "value": 433632.69,
+      "unit": "per s",
+      "better": "higher",
+      "tolerance": 0.25,
+      "slack": 0.0,
+      "samples": [
+        433632.69,
+        419842.531,
+        423684.542,
+        448073.548,
+        437547.261
+      ]
+    },
+    "tool_log.messages": {
+      "value": 156.4,
+      "unit": "count",
+      "better": "lower",
+      "tolerance": 0.15,
+      "slack": 1.0,
+      "samples": [
+        159.6,
+        155.2,
+        156.4,
+        155.6,
+        160.2
+      ]
+    },
+    "tool_log.wall_ms": {
+      "value": 34.591,
+      "unit": "ms",
+      "better": "lower",
+      "tolerance": 0.3,
+      "slack": 2.0,
+      "samples": [
+        34.591,
+        35.728,
+        35.404,
+        33.477,
+        34.282
+      ]
+    }
+  },
+  "checks": {
+    "burst.all_succeeded": {
+      "passed": true,
+      "detail": ""
+    },
+    "burst.cleaned_up_after_ack": {
+      "passed": true,
+      "detail": ""
+    },
+    "burst.logs_consistent": {
+      "passed": true,
+      "detail": ""
+    },
+    "burst.logs_contiguous": {
+      "passed": true,
+      "detail": ""
+    },
+    "burst.no_secret_sent": {
+      "passed": true,
+      "detail": ""
+    },
+    "burst.no_unknown_results": {
+      "passed": true,
+      "detail": ""
+    },
+    "burst.one_result_each": {
+      "passed": true,
+      "detail": ""
+    },
+    "burst.results_consistent": {
+      "passed": true,
+      "detail": ""
+    },
+    "burst_disconnects.all_succeeded": {
+      "passed": true,
+      "detail": ""
+    },
+    "burst_disconnects.cleaned_up_after_ack": {
+      "passed": true,
+      "detail": ""
+    },
+    "burst_disconnects.disconnected_mid_burst": {
+      "passed": true,
+      "detail": ""
+    },
+    "burst_disconnects.logs_consistent": {
+      "passed": true,
+      "detail": ""
+    },
+    "burst_disconnects.logs_contiguous": {
+      "passed": true,
+      "detail": ""
+    },
+    "burst_disconnects.no_secret_sent": {
+      "passed": true,
+      "detail": ""
+    },
+    "burst_disconnects.no_unknown_results": {
+      "passed": true,
+      "detail": ""
+    },
+    "burst_disconnects.results_consistent": {
+      "passed": true,
+      "detail": ""
+    },
+    "drain.agent_exited_cleanly": {
+      "passed": true,
+      "detail": ""
+    },
+    "drain.every_assignment_answered": {
+      "passed": true,
+      "detail": ""
+    },
+    "drain.logs_consistent": {
+      "passed": true,
+      "detail": ""
+    },
+    "drain.logs_contiguous": {
+      "passed": true,
+      "detail": ""
+    },
+    "drain.no_secret_sent": {
+      "passed": true,
+      "detail": ""
+    },
+    "drain.no_unknown_results": {
+      "passed": true,
+      "detail": ""
+    },
+    "drain.outcomes_expected": {
+      "passed": true,
+      "detail": ""
+    },
+    "drain.results_consistent": {
+      "passed": true,
+      "detail": ""
+    },
+    "drain.started_changes_finish": {
+      "passed": true,
+      "detail": ""
+    },
+    "log_pipeline.no_secret_kept": {
+      "passed": true,
+      "detail": ""
+    },
+    "observe.all_succeeded": {
+      "passed": true,
+      "detail": ""
+    },
+    "observe.cleaned_up_after_ack": {
+      "passed": true,
+      "detail": ""
+    },
+    "observe.logs_consistent": {
+      "passed": true,
+      "detail": ""
+    },
+    "observe.logs_contiguous": {
+      "passed": true,
+      "detail": ""
+    },
+    "observe.no_secret_sent": {
+      "passed": true,
+      "detail": ""
+    },
+    "observe.no_unknown_results": {
+      "passed": true,
+      "detail": ""
+    },
+    "observe.results_consistent": {
+      "passed": true,
+      "detail": ""
+    },
+    "outbox.empty_after_remove": {
+      "passed": true,
+      "detail": ""
+    },
+    "outbox.round_trip_intact": {
+      "passed": true,
+      "detail": ""
+    },
+    "tool_log.cleaned_up_after_ack": {
+      "passed": true,
+      "detail": ""
+    },
+    "tool_log.escapes_removed": {
+      "passed": true,
+      "detail": ""
+    },
+    "tool_log.every_line_delivered": {
+      "passed": true,
+      "detail": ""
+    },
+    "tool_log.logs_consistent": {
+      "passed": true,
+      "detail": ""
+    },
+    "tool_log.logs_contiguous": {
+      "passed": true,
+      "detail": ""
+    },
+    "tool_log.no_secret_sent": {
+      "passed": true,
+      "detail": ""
+    },
+    "tool_log.no_unknown_results": {
+      "passed": true,
+      "detail": ""
+    },
+    "tool_log.preview_succeeded": {
+      "passed": true,
+      "detail": ""
+    },
+    "tool_log.results_consistent": {
+      "passed": true,
+      "detail": ""
+    }
+  }
+}
