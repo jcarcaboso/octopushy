@@ -1084,6 +1084,9 @@ describe("VariablesPage options", () => {
     await user.click(within(dialog).getByRole("button", { name: `Exclude ${dns} from purge` }));
     // One change at a time: the others wait until this one is saved.
     expect(within(dialog).getByRole("button", { name: `Include ${spare} in purge again` })).toBeDisabled();
+    // Nor can the dialog close and reopen with the key ticked again before it is saved.
+    await user.click(within(dialog).getByRole("button", { name: "Keep as is" }));
+    expect(screen.getByRole("dialog", { name: "Review unused secrets" })).toBeInTheDocument();
     release();
     await within(dialog).findByRole("button", { name: `Include ${dns} in purge again` });
     expect(within(dialog).getByRole("button", { name: "Purge" })).toBeDisabled();

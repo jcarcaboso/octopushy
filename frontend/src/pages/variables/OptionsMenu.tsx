@@ -61,8 +61,9 @@ export function OptionsMenu({ entries }: { entries: Variable[] }) {
     groups.set(node, [...(groups.get(node) ?? []), key]);
   }
 
+  // Open until an exclusion is saved: reopened sooner, the list would offer that key ticked again.
   const close = () => {
-    if (!purge.isPending) setCandidates(null);
+    if (!purge.isPending && !exclusion.isPending) setCandidates(null);
   };
   const choose = (keys: string[], on: boolean) =>
     setPicked((current) => {
