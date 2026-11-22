@@ -355,7 +355,7 @@ on("PUT", "/api/variables", ({ body }) => {
     return problem(409, expected === 0 ? `'${key}' is already set.` : `v${activeNow(key)} of '${key}' became active meanwhile.`);
   }
   const visibility = (body.visibility as string | null) ?? existing?.visibility ?? "secret";
-  const entry = existing ?? { key, visibility, description: null, version: 0, latestVersion: 0, updatedAt: now(), value: null, usedBy: [], revoked: false, lines: null, newerVersion: null };
+  const entry = existing ?? { key, visibility, description: null, version: 0, latestVersion: 0, updatedAt: now(), value: null, usedBy: [], revoked: false, lines: null, newerVersion: null, purgeExcluded: false };
   entry.description = (body.description as string | null) ?? null;
   if (typeof body.value === "string") {
     entry.visibility = visibility;
@@ -372,11 +372,20 @@ on("DELETE", "/api/variables", ({ query }) => {
 });
 on("POST", "/api/variables/purge", ({ body }) => {
   const named = body.keys as string[];
-  const deleted = named.filter((key) => findVariable(key)?.visibility === "secret" && findVariable(key)?.usedBy.length === 0);
-  const kept = named.filter((key) => !deleted.includes(key)).map((key) => ({ key, reason: `'${key}' is still used. Delete it once nothing uses it.` }));
+  const deleted = named.filter((key) => findVariable(key)?.visibility === "secret" && findVariable(key)?.usedBy.length === 0 && !findVariable(key)?.purgeExcluded);
+  const kept = named
+    .filter((key) => !deleted.includes(key))
+    .map((key) => ({
+      key,
+      reason: findVariable(key)?.purgeExcluded ? `'${key}' is excluded from purge. Include it again to purge it.` : `'${key}' is still used. Delete it once nothing uses it.`,
+    }));
   data.variables.entries = data.variables.entries.filter((v) => !deleted.includes(v.key));
   for (const key of deleted) data.variableActive.delete(key);
   return { deleted, kept };
+});
+on("POST", "/api/variables/purge-exclusion", ({ body }) => {
+  const entry = findVariable(body.key as string);
+  if (entry) entry.purgeExcluded = body.excluded as boolean;
 });
 on("POST", "/api/variables/reveal", ({ body }) => ({
   values: (body.keys as string[]).map((key) => {

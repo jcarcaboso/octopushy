@@ -5166,6 +5166,59 @@
         }
       }
     },
+    "/api/variables/purge-exclusion": {
+      "post": {
+        "tags": [
+          "Variables"
+        ],
+        "operationId": "setVariablePurgeExclusion",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VariablePurgeExclusionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
     "/api/variables/reveal": {
       "post": {
         "tags": [
@@ -11711,7 +11764,8 @@
           "latestVersion",
           "revoked",
           "lines",
-          "newerVersion"
+          "newerVersion",
+          "purgeExcluded"
         ],
         "type": "object",
         "properties": {
@@ -11767,6 +11821,9 @@
               "integer"
             ],
             "format": "int32"
+          },
+          "purgeExcluded": {
+            "type": "boolean"
           }
         }
       },
@@ -11815,6 +11872,21 @@
             "items": {
               "$ref": "#/components/schemas/KeptVariableDto"
             }
+          }
+        }
+      },
+      "VariablePurgeExclusionRequest": {
+        "required": [
+          "key",
+          "excluded"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "excluded": {
+            "type": "boolean"
           }
         }
       },

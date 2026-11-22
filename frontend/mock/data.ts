@@ -675,7 +675,7 @@ const entry = (key: string, visibility: "secret" | "plain", usedBy: string[], ve
     const n = version - i;
     return stored(n, n === version ? own : `${own}-v${n}`, n === version ? "active" : "previous", 1000 * (i + 1), n > 1 && n === version ? "Rotated after the token audit." : null);
   }));
-  const created: Variable = { key, visibility, description, version, updatedAt: ago(1000), value: null, usedBy, latestVersion: version, revoked: false, lines: null, newerVersion: null };
+  const created: Variable = { key, visibility, description, version, updatedAt: ago(1000), value: null, usedBy, latestVersion: version, revoked: false, lines: null, newerVersion: null, purgeExcluded: false };
   summarizeVariable(created);
   return created;
 };
@@ -684,7 +684,7 @@ const entry = (key: string, visibility: "secret" | "plain", usedBy: string[], ve
 const withHistory = (key: string, visibility: "secret" | "plain", usedBy: string[], description: string, versions: StoredVersion[]): Variable => {
   variableHistory.set(key, versions);
   variableActive.set(key, versions.find((v) => v.status === "active")?.version ?? 0);
-  const created: Variable = { key, visibility, description, version: 0, updatedAt: ago(0), value: null, usedBy, latestVersion: 0, revoked: false, lines: null, newerVersion: null };
+  const created: Variable = { key, visibility, description, version: 0, updatedAt: ago(0), value: null, usedBy, latestVersion: 0, revoked: false, lines: null, newerVersion: null, purgeExcluded: false };
   summarizeVariable(created);
   return created;
 };

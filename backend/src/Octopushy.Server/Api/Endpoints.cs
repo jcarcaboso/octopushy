@@ -702,7 +702,8 @@ public static partial class Endpoints
                     revoked,
                     // A secret is opened here only to count its lines; its value stays on the server.
                     entry.Visibility == Visibilities.Plain ? VariableStore.Lines(value) : await store.ActiveLinesAsync(entry.Key, ct),
-                    newer.TryGetValue(entry.Key, out var newerVersion) ? newerVersion : null));
+                    newer.TryGetValue(entry.Key, out var newerVersion) ? newerVersion : null,
+                    entry.PurgeExcluded));
             }
 
             var known = entries.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
@@ -772,15 +773,22 @@ public static partial class Endpoints
                     try
                     {
                         VariableStore.CheckUserKey(key);
-                        var visibility = await db.StoreEntries.AsNoTracking().Where(e => e.Key == key).Select(e => e.Visibility).FirstOrDefaultAsync(ct);
-                        if (visibility is null)
+                        var entry = await db.StoreEntries.AsNoTracking().Where(e => e.Key == key)
+                            .Select(e => new { e.Visibility, e.PurgeExcluded }).FirstOrDefaultAsync(ct);
+                        if (entry is null)
                         {
                             continue;
                         }
 
-                        if (visibility != Visibilities.Secret)
+                        if (entry.Visibility != Visibilities.Secret)
                         {
                             kept.Add(new KeptVariableDto(key, $"'{key}' is not a secret. Purge deletes only secrets."));
+                            continue;
+                        }
+
+                        if (entry.PurgeExcluded)
+                        {
+                            kept.Add(new KeptVariableDto(key, $"'{key}' is excluded from purge. Include it again to purge it."));
                             continue;
                         }
 
@@ -801,6 +809,20 @@ public static partial class Endpoints
             return TypedResults.Ok(result);
         })
         .WithName("purgeVariables");
+
+        group.MapPost("/purge-exclusion", async (VariablePurgeExclusionRequest request, HttpContext http, RunEngine engine, ILoggerFactory loggers,
+            CancellationToken ct) =>
+        {
+            await engine.ExecuteAsync(async (db, services) =>
+            {
+                await services.GetRequiredService<VariableStore>().ExcludeFromPurgeAsync(request.Key, request.Excluded, ct);
+                return true;
+            }, ct);
+            loggers.CreateLogger("Octopushy.Server.Variables").LogInformation(
+                "{User} set {Key} excluded from purge: {Excluded}.", http.User.Identity?.Name ?? "administrator", request.Key, request.Excluded);
+            return TypedResults.NoContent();
+        })
+        .WithName("setVariablePurgeExclusion");
 
         group.MapPost("/reveal", async (VariableRevealRequest request, HttpContext http, VariableStore store, ILoggerFactory loggers, CancellationToken ct) =>
         {

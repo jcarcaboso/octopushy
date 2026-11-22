@@ -1,7 +1,7 @@
 import { ArrowLeft, Download, Eye, EyeOff, Lock, Maximize2, Minimize2, Pencil, Replace, Trash2, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "../../api/client";
-import { useDeleteVariable, useSetVariable, useStageVariable } from "../../api/queries";
+import { useDeleteVariable, useSetPurgeExclusion, useSetVariable, useStageVariable } from "../../api/queries";
 import type { Variable } from "../../api/types";
 import { Callout } from "../../components/Callout";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
@@ -101,6 +101,7 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
   const stage = useStageVariable();
   const describe = useSetVariable();
   const remove = useDeleteVariable();
+  const exclusion = useSetPurgeExclusion();
 
   const changed = edit ? (edit.base === undefined ? edit.text !== "" : edit.text !== edit.base) : false;
   const stale = edit !== null && edit.version !== entry.version;
@@ -487,6 +488,29 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
             <UsedBy usedBy={entry.usedBy} />
             {entry.usedBy.length > 0 ? <p className="muted small">A new active version starts one setup run for each of these.</p> : null}
           </section>
+          {secret ? (
+            <section className="vars-details__section" aria-labelledby="vars-purge">
+              <h3 id="vars-purge" className="vars-label">
+                Purge
+              </h3>
+              <div className="vars-details__line">
+                <span>{entry.purgeExcluded ? "Excluded. No purge deletes it." : "A purge may delete it once nothing uses it."}</span>
+                <button
+                  type="button"
+                  className="link-button small"
+                  disabled={exclusion.isPending}
+                  onClick={() => exclusion.mutate({ key: entry.key, excluded: !entry.purgeExcluded })}
+                >
+                  {entry.purgeExcluded ? "Include again" : "Exclude"}
+                </button>
+              </div>
+              {exclusion.error ? (
+                <Callout kind="danger" title="The purge setting could not be saved." alert>
+                  Try again or reload the page.
+                </Callout>
+              ) : null}
+            </section>
+          ) : null}
           <div className="vars-details__delete">
             <button
               type="button"

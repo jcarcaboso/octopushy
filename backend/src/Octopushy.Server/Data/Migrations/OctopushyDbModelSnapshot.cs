@@ -1936,6 +1936,10 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("latest_version");
 
+                    b.Property<bool>("PurgeExcluded")
+                        .HasColumnType("boolean")
+                        .HasColumnName("purge_excluded");
+
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");

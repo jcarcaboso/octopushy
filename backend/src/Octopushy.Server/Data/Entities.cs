@@ -1388,6 +1388,9 @@ public sealed class StoreEntry
 
     public string? Description { get; set; }
 
+    /// <summary>An operator kept this key out of every purge until they include it again. Deleting the key itself is unaffected.</summary>
+    public bool PurgeExcluded { get; set; }
+
     public int CurrentVersion { get; set; }
 
     /// <summary>Allocation counter; staging a candidate does not move CurrentVersion.</summary>

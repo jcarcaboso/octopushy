@@ -25,6 +25,7 @@ function entry(overrides: Partial<Variable> = {}): Variable {
     usedBy: ["recipe/site-a"],
     lines: 1,
     newerVersion: latestVersion > version ? latestVersion : null,
+    purgeExcluded: false,
     ...overrides,
   };
 }
@@ -360,6 +361,29 @@ describe("VariablesPage entry pane", () => {
     expect(within(selected).getByText("SMTP_PASSWORD changed, SMTP_PORT added.")).toBeInTheDocument();
     expect(within(selected).getByText("Line 4: there is no = between the name and the value")).toBeInTheDocument();
     expect(within(selected).getByRole("button", { name: "Save and make active" })).toBeEnabled();
+  });
+
+  it("excludes a secret from purge from its details, and includes it again", async () => {
+    const user = userEvent.setup();
+    let excluded = false;
+    const { requests } = mockApi({
+      "GET /api/variables": () => store(entry({ purgeExcluded: excluded })),
+      "POST /api/variables/purge-exclusion": ({ body }) => {
+        excluded = (body as { excluded: boolean }).excluded;
+      },
+    });
+    renderPage(opened(key));
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Details" }));
+    expect(within(selected).getByText("A purge may delete it once nothing uses it.")).toBeInTheDocument();
+    await user.click(within(selected).getByRole("button", { name: "Exclude" }));
+    expect(await within(selected).findByText("Excluded. No purge deletes it.")).toBeInTheDocument();
+    await user.click(within(selected).getByRole("button", { name: "Include again" }));
+    expect(await within(selected).findByText("A purge may delete it once nothing uses it.")).toBeInTheDocument();
+    expect(requests.filter((r) => r.path === "/api/variables/purge-exclusion").map((r) => r.body)).toEqual([
+      { key, excluded: true },
+      { key, excluded: false },
+    ]);
   });
 
   it("edits the description without sending a value", async () => {
@@ -990,19 +1014,21 @@ describe("VariablesPage options", () => {
     const { client } = renderPage();
     await user.click(await screen.findByRole("button", { name: "Options" }));
     await user.click(screen.getByRole("button", { name: /^Purge/ }));
-    const dialog = await screen.findByRole("dialog", { name: "Purge 2 unused secrets?" });
-    expect(within(dialog).getByText(unused)).toBeInTheDocument();
-    expect(within(dialog).queryByText(key)).not.toBeInTheDocument();
-    expect(within(dialog).queryByText(plain)).not.toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Review unused secrets" });
+    expect(within(dialog).getByRole("checkbox", { name: `Purge ${unused}` })).toBeChecked();
+    expect(within(dialog).queryByRole("checkbox", { name: `Purge ${key}` })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("checkbox", { name: `Purge ${plain}` })).not.toBeInTheDocument();
 
     // A key set while the dialog is open is not purged: only what the operator saw is sent.
     late = true;
     await client.refetchQueries();
     await screen.findByText("Deletes the 3 secrets nothing uses.");
-    await user.click(within(dialog).getByRole("button", { name: "Purge" }));
-    // While it runs the dialog stays, so its result is not lost.
+    await user.click(within(dialog).getByRole("button", { name: "Purge 2 secrets" }));
+    // While it runs nothing in the list can change, and the dialog stays, so its result is not lost.
+    expect(within(dialog).getByRole("checkbox", { name: `Purge ${unused}` })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: `Exclude ${unused} from purge` })).toBeDisabled();
     await user.click(within(dialog).getByRole("button", { name: "Keep as is" }));
-    expect(screen.getByRole("dialog", { name: "Purge 2 unused secrets?" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Review unused secrets" })).toBeInTheDocument();
     finish();
 
     const done = await screen.findByRole("dialog", { name: "Purge finished" });
@@ -1012,4 +1038,80 @@ describe("VariablesPage options", () => {
     const sent = requests.find((r) => r.method === "POST" && r.path === "/api/variables/purge");
     expect(sent?.body).toEqual({ keys: [unused, "old/raced"] });
   });
+
+  it("groups the secrets by node, purges only the ticked ones, and excludes or includes one again", async () => {
+    const user = userEvent.setup();
+    const umbrel = "proxmox/umbrel/api-token";
+    const worker = "proxmox/umbrel/worker-ct-01/enrollment_token";
+    const dns = "proxmox/ziost/dns-ct-01/admin_password";
+    const spare = "proxmox/ziost/ha-ct-01/recorder_password";
+    const excluded = new Set([spare]);
+    let release: () => void = () => {};
+    const { requests } = mockApi({
+      "GET /api/variables": () => ({
+        entries: [umbrel, worker, dns, spare].map((k) => entry({ key: k, usedBy: [], purgeExcluded: excluded.has(k) })),
+        missing: [],
+        system: [],
+      }),
+      "POST /api/variables/purge-exclusion": ({ body }) =>
+        new Promise<undefined>((resolve) => {
+          release = () => {
+            const { key: k, excluded: on } = body as { key: string; excluded: boolean };
+            if (on) excluded.add(k);
+            else excluded.delete(k);
+            resolve(undefined);
+          };
+        }),
+      "POST /api/variables/purge": () => ({ deleted: [], kept: [] }),
+    });
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Options" }));
+    expect(screen.getByText("Deletes the 3 secrets nothing uses.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Purge/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Review unused secrets" });
+
+    const ziost = within(dialog).getByRole("region", { name: "proxmox/ziost" });
+    expect(within(ziost).queryByRole("checkbox", { name: `Purge ${spare}` })).not.toBeInTheDocument();
+    expect(within(ziost).getByText("Excluded")).toBeInTheDocument();
+    expect(ziost).toHaveTextContent("1 of 1 to purge · 1 excluded");
+
+    // Clearing a node's checkbox leaves the other nodes ticked.
+    await user.click(within(dialog).getByRole("checkbox", { name: "Purge every secret in proxmox/umbrel" }));
+    expect(within(dialog).getByRole("checkbox", { name: `Purge ${umbrel}` })).not.toBeChecked();
+    expect(dialog).toHaveTextContent("1 to purge · 2 kept this time · 1 excluded");
+
+    // Excluding a secret saves it and unticks it; including one again leaves it unticked.
+    await user.click(within(dialog).getByRole("button", { name: `Exclude ${dns} from purge` }));
+    // One change at a time: the others wait until this one is saved.
+    expect(within(dialog).getByRole("button", { name: `Include ${spare} in purge again` })).toBeDisabled();
+    // Nor can the dialog close and reopen with the key ticked again before it is saved.
+    await user.click(within(dialog).getByRole("button", { name: "Keep as is" }));
+    expect(screen.getByRole("dialog", { name: "Review unused secrets" })).toBeInTheDocument();
+    release();
+    await within(dialog).findByRole("button", { name: `Include ${dns} in purge again` });
+    expect(within(dialog).getByRole("button", { name: "Purge" })).toBeDisabled();
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: `Include ${spare} in purge again` })).toBeEnabled());
+    await user.click(within(dialog).getByRole("button", { name: `Include ${spare} in purge again` }));
+    release();
+    const back = await within(dialog).findByRole("checkbox", { name: `Purge ${spare}` });
+    expect(back).not.toBeChecked();
+
+    // Select all skips excluded secrets; a filter narrows what select and clear act on.
+    await user.click(within(dialog).getByRole("button", { name: "Select all" }));
+    expect(dialog).toHaveTextContent("3 to purge · 0 kept this time · 1 excluded");
+    await user.type(within(dialog).getByRole("searchbox", { name: "Filter keys" }), "worker");
+    await user.click(within(dialog).getByRole("button", { name: "Clear shown" }));
+    await user.clear(within(dialog).getByRole("searchbox", { name: "Filter keys" }));
+    await user.click(within(dialog).getByRole("button", { name: "Purge 2 secrets" }));
+
+    await screen.findByRole("dialog", { name: "Purge finished" });
+    const exclusions = requests.filter((r) => r.method === "POST" && r.path === "/api/variables/purge-exclusion").map((r) => r.body);
+    expect(exclusions).toEqual([
+      { key: dns, excluded: true },
+      { key: spare, excluded: false },
+    ]);
+    const sent = requests.find((r) => r.method === "POST" && r.path === "/api/variables/purge");
+    expect(sent?.body).toEqual({ keys: [umbrel, spare] });
+  });
 });
+
