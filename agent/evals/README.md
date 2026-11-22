@@ -77,22 +77,22 @@ ACKs added about 40 ms to every small message, and the first measurements were m
 
 | | |
 |---|---|
-| one `observe` read | 17 ms to result, 12 ms of it before `AttemptStarted` |
-| 64 reads, limit 8 | 660 ms, 97 attempts/s, 2.3 ms CPU per attempt |
-| same with 2 disconnects | 2.8 s, 55 results sent twice |
-| reconnect after the server closes | 735 ms |
-| shutdown under load | 190 ms |
-| tool output to server | 425 000 lines/s |
+| one `observe` read | 16 ms to result, 11 ms of it before `AttemptStarted` |
+| 64 reads, limit 8 | 625 ms, 102 attempts/s, 2.2 ms CPU per attempt |
+| same with 2 disconnects | 2.6 s, 55 results sent twice |
+| reconnect after the server closes | 615 ms |
+| shutdown under load | 185 ms |
+| tool output to server | 435 000 lines/s |
 | log masking and buffering | 345 000 lines/s, 2.9 µs CPU per line |
-| outbox write (256 KiB plan, fsync) | 4.6 ms; remove 2.1 ms |
+| outbox write (256 KiB plan, fsync) | 4.6 ms; remove 1.9 ms |
 
 Where the time goes, from these numbers:
 
-- Durable writes dominate throughput. 64 reads take 660 ms where 8 parallel slots of a 17 ms read
-  would take about 140 ms. Each attempt makes several fsyncs (workspace marker, running marker,
+- Durable writes dominate throughput. 64 reads take 625 ms where 8 parallel slots of a 16 ms read
+  would take about 130 ms. Each attempt makes several fsyncs (workspace marker, running marker,
   outbox write, removal), and on one file system they serialize. `Outbox::put` runs on an async
   worker thread, not in `spawn_blocking`.
-- Most of a single read's latency, 12 of 17 ms, comes before it starts, while the workspace and
+- Most of a single read's latency, 11 of 16 ms, comes before it starts, while the workspace and
   its marker are written. Those writes are what restart recovery relies on, so batching them is
   the safe direction. Skipping them is not.
 - A reconnect after a clean close waits a 0.5–1 s backoff, and every unacknowledged result is
