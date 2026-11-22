@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 
 namespace Octopushy.Server.Api;
 
@@ -717,7 +718,7 @@ public sealed record VariablePurgeRequest(IReadOnlyList<string> Keys);
 public sealed record KeptVariableDto(string Key, string Reason);
 
 /// <summary>Keeps a key out of every purge, or lets a purge delete it again.</summary>
-public sealed record VariablePurgeExclusionRequest(string Key, bool Excluded);
+public sealed record VariablePurgeExclusionRequest(string Key, [property: JsonRequired] bool Excluded);
 
 public sealed record VariablePurgeDto(IReadOnlyList<string> Deleted, IReadOnlyList<KeptVariableDto> Kept);
 

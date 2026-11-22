@@ -2676,6 +2676,13 @@
   padding-left: var(--space-5);
 }
 
+.purge-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 .purge-toolbar {
   display: flex;
   flex-wrap: wrap;

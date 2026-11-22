@@ -73,12 +73,12 @@ export function OptionsMenu({ entries }: { entries: Variable[] }) {
       }
       return next;
     });
+  // One change at a time, so Purge stays disabled until every exclusion has settled.
   const setExcluded = (key: string, value: boolean) => {
     // An excluded key is unticked, and one included again stays unticked until the operator chooses it.
     choose([key], false);
     exclusion.mutate({ key, excluded: value });
   };
-  const toggling = exclusion.isPending ? exclusion.variables?.key : undefined;
 
   return (
     <div
@@ -145,7 +145,8 @@ export function OptionsMenu({ entries }: { entries: Variable[] }) {
           </>
         }
       >
-        <div className="stack">
+        {/* Nothing can change while a purge runs: the keys it was sent are the ones it deletes. */}
+        <fieldset className="stack purge-fields" disabled={purge.isPending}>
           <div className="purge-toolbar">
             <label className="vars-search">
               <Search size={14} aria-hidden="true" />
@@ -202,7 +203,7 @@ export function OptionsMenu({ entries }: { entries: Variable[] }) {
                             type="button"
                             className="button button--small"
                             aria-label={`Include ${key} in purge again`}
-                            disabled={toggling === key}
+                            disabled={exclusion.isPending}
                             onClick={() => setExcluded(key, false)}
                           >
                             Include again
@@ -229,7 +230,7 @@ export function OptionsMenu({ entries }: { entries: Variable[] }) {
                           className="button button--small button--ghost purge-row__exclude"
                           aria-label={`Exclude ${key} from purge`}
                           title="Never purge this secret"
-                          disabled={toggling === key}
+                          disabled={exclusion.isPending}
                           onClick={() => setExcluded(key, true)}
                         >
                           <Shield size={14} aria-hidden="true" /> Exclude
@@ -242,7 +243,7 @@ export function OptionsMenu({ entries }: { entries: Variable[] }) {
             );
           })}
           <ErrorMessage error={purge.error ?? exclusion.error} />
-        </div>
+        </fieldset>
       </Dialog>
       <Dialog
         open={candidates !== null && Boolean(result)}

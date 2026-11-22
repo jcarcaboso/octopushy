@@ -105,6 +105,9 @@ public class VariableDeletionTests(PostgresFixture postgres) : IClassFixture<Pos
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsJsonAsync("/api/variables/purge-exclusion", new { key = Spare, excluded = true })).StatusCode);
         var list = await client.GetFromJsonAsync<JsonObject>("/api/variables");
         Assert.True(list!["entries"]!.AsArray().Single(v => v!["key"]!.GetValue<string>() == Spare)!["purgeExcluded"]!.GetValue<bool>());
+        // A request that leaves out the flag is refused, and does not clear it.
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/variables/purge-exclusion", new { key = Spare })).StatusCode);
+        Assert.True(await server.QueryAsync(db => db.StoreEntries.Where(e => e.Key == Spare).Select(e => e.PurgeExcluded).SingleAsync()));
 
         // A client that still sends the key, such as one opened before the exclusion, does not purge it.
         var body = (await (await client.PostAsJsonAsync("/api/variables/purge", new { keys = new[] { Spare } })).Content.ReadFromJsonAsync<JsonObject>())!;

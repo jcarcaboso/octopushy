@@ -1024,7 +1024,9 @@ describe("VariablesPage options", () => {
     await client.refetchQueries();
     await screen.findByText("Deletes the 3 secrets nothing uses.");
     await user.click(within(dialog).getByRole("button", { name: "Purge 2 secrets" }));
-    // While it runs the dialog stays, so its result is not lost.
+    // While it runs nothing in the list can change, and the dialog stays, so its result is not lost.
+    expect(within(dialog).getByRole("checkbox", { name: `Purge ${unused}` })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: `Exclude ${unused} from purge` })).toBeDisabled();
     await user.click(within(dialog).getByRole("button", { name: "Keep as is" }));
     expect(screen.getByRole("dialog", { name: "Review unused secrets" })).toBeInTheDocument();
     finish();
@@ -1044,17 +1046,22 @@ describe("VariablesPage options", () => {
     const dns = "proxmox/ziost/dns-ct-01/admin_password";
     const spare = "proxmox/ziost/ha-ct-01/recorder_password";
     const excluded = new Set([spare]);
+    let release: () => void = () => {};
     const { requests } = mockApi({
       "GET /api/variables": () => ({
         entries: [umbrel, worker, dns, spare].map((k) => entry({ key: k, usedBy: [], purgeExcluded: excluded.has(k) })),
         missing: [],
         system: [],
       }),
-      "POST /api/variables/purge-exclusion": ({ body }) => {
-        const { key: k, excluded: on } = body as { key: string; excluded: boolean };
-        if (on) excluded.add(k);
-        else excluded.delete(k);
-      },
+      "POST /api/variables/purge-exclusion": ({ body }) =>
+        new Promise<undefined>((resolve) => {
+          release = () => {
+            const { key: k, excluded: on } = body as { key: string; excluded: boolean };
+            if (on) excluded.add(k);
+            else excluded.delete(k);
+            resolve(undefined);
+          };
+        }),
       "POST /api/variables/purge": () => ({ deleted: [], kept: [] }),
     });
     renderPage();
@@ -1075,9 +1082,14 @@ describe("VariablesPage options", () => {
 
     // Excluding a secret saves it and unticks it; including one again leaves it unticked.
     await user.click(within(dialog).getByRole("button", { name: `Exclude ${dns} from purge` }));
+    // One change at a time: the others wait until this one is saved.
+    expect(within(dialog).getByRole("button", { name: `Include ${spare} in purge again` })).toBeDisabled();
+    release();
     await within(dialog).findByRole("button", { name: `Include ${dns} in purge again` });
     expect(within(dialog).getByRole("button", { name: "Purge" })).toBeDisabled();
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: `Include ${spare} in purge again` })).toBeEnabled());
     await user.click(within(dialog).getByRole("button", { name: `Include ${spare} in purge again` }));
+    release();
     const back = await within(dialog).findByRole("checkbox", { name: `Purge ${spare}` });
     expect(back).not.toBeChecked();
 
