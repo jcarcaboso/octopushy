@@ -73,6 +73,16 @@ check:
 test-tool-users:
     tests/tool-users/run.sh
 
+# Environment: OCTOPUSHY_EVAL_RUNS=3, OCTOPUSHY_EVAL_ONLY=burst,outbox (agent/evals/README.md).
+# The agent's performance evals and their invariants; fails on a failed check or a regression from agent/evals/baseline.json.
+agent-evals:
+    cd agent && cargo test --release --locked -p octopushy --test evals -- --ignored --nocapture
+
+# Measure the agent five times and save the result as agent/evals/baseline.json.
+agent-evals-baseline:
+    cd agent && OCTOPUSHY_EVAL_SAVE_BASELINE=1 OCTOPUSHY_EVAL_RUNS="${OCTOPUSHY_EVAL_RUNS:-5}" \
+      cargo test --release --locked -p octopushy --test evals -- --ignored --nocapture
+
 # End to end: backend, a real agent running OpenTofu in rootless podman, and a mock Proxmox API.
 e2e: dev-db
     tests/e2e/run.sh

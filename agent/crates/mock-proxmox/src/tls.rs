@@ -79,6 +79,8 @@ pub(crate) async fn serve(
 
     loop {
         let (stream, _) = listener.accept().await?;
+        // As a real server does: without it, Nagle and delayed ACKs add ~40 ms to small replies.
+        let _ = stream.set_nodelay(true);
         let acceptor = acceptor.clone();
         let app = app.clone();
         tokio::spawn(async move {
