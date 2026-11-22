@@ -73,28 +73,34 @@ a relative measure.
 The test servers set `TCP_NODELAY`, as Kestrel does. Without it, Nagle's algorithm and delayed
 ACKs added about 40 ms to every small message, and the first measurements were mostly that.
 
-## Starting point (baseline.json, 8 vCPU VM)
+## History (8 vCPU VM, btrfs)
 
-| | |
-|---|---|
-| one `observe` read | 16 ms to result, 11 ms of it before `AttemptStarted` |
-| 64 reads, limit 8 | 625 ms, 102 attempts/s, 2.2 ms CPU per attempt |
-| same with 2 disconnects | 2.6 s, 55 results sent twice |
-| reconnect after the server closes | 615 ms |
-| shutdown under load | 185 ms |
-| tool output to server | 435 000 lines/s |
-| log masking and buffering | 345 000 lines/s, 2.9 µs CPU per line |
-| outbox write (256 KiB plan, fsync) | 4.6 ms; remove 1.9 ms |
+| | first baseline | disk work off the loop |
+|---|---|---|
+| one `observe` read | 16 ms, 11 ms before `AttemptStarted` | unchanged |
+| 64 reads, limit 8 | 625 ms, 102 attempts/s | 80 ms, 800 attempts/s |
+| CPU per attempt (whole test process) | 2.2 ms | 2.5 ms |
+| same with 2 disconnects | 2.6 s, 55 results sent twice | 2.3 s, none twice |
+| shutdown under load | 185 ms | 28 ms |
+| reconnect after the server closes | 615 ms | unchanged (random backoff) |
+| tool output to server | 435 000 lines/s | unchanged |
+| log masking and buffering | 345 000 lines/s, 2.9 µs CPU per line | unchanged |
+| outbox write (256 KiB plan, fsync) | 4.6 ms; remove 1.9 ms | unchanged |
 
-Where the time goes, from these numbers:
+**Disk work off the loop.** Accepting an assignment (workspace and `queued` marker) and
+acknowledging a result (marker and outbox entry removed) used to run in the connection's loop. So
+every attempt's fsyncs queued behind every other's, and logs and results waited behind them. The
+result write ran on an async worker. All three now run on tokio's blocking pool, in the same order
+within an attempt and with the same fsyncs, so the fsyncs of different attempts overlap and the
+file system commits them together. On this disk, 64 atomic writes take 263 ms one after another
+and 64 ms from 8 threads. An acknowledged attempt stays counted until its files are gone, so a
+draining agent waits for them, and nothing of it is sent again in the meantime.
 
-- Durable writes dominate throughput. 64 reads take 625 ms where 8 parallel slots of a 16 ms read
-  would take about 130 ms. Each attempt makes several fsyncs (workspace marker, running marker,
-  outbox write, removal), and on one file system they serialize. `Outbox::put` runs on an async
-  worker thread, not in `spawn_blocking`.
-- Most of a single read's latency, 11 of 16 ms, comes before it starts, while the workspace and
-  its marker are written. Those writes are what restart recovery relies on, so batching them is
-  the safe direction. Skipping them is not.
-- A reconnect after a clean close waits a 0.5–1 s backoff, and every unacknowledged result is
-  sent again (55 duplicates for 64 attempts). The server drops those, but they cost bandwidth.
+What is left, from these numbers:
+
+- A single read still spends 11 of its 16 ms on four fsyncs before it starts (`queued` marker,
+  then `running` marker). Restart recovery relies on both. A crash between them reports the
+  attempt as never started rather than as a lost lease, so writing them less often changes what
+  a crash means.
+- A reconnect after a clean close waits a 0.5–1 s backoff.
 - Log masking is the per-line cost: every line is matched against every secret pattern twice.

@@ -791,12 +791,18 @@ async fn the_servers_flag_decides_whether_an_attempt_is_a_change() {
     // No flag, from an older server: the agent's table.
     h.manager
         .accept(assignment("old", "test", "mutate", r#"{"ms":0}"#));
-    let marker = |id: &str| {
-        workspace::read(&workspace::dir(&h.work, id))
-            .unwrap()
-            .unwrap()
-            .mutating
-    };
+    // The markers are written on each attempt's own task, before it starts.
+    let ws = |id: &str| workspace::dir(&h.work, id);
+    for _ in 0..200 {
+        if ["change", "read", "old"]
+            .iter()
+            .all(|id| ws(id).join(workspace::MARKER).exists())
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let marker = |id: &str| workspace::read(&ws(id)).unwrap().unwrap().mutating;
     assert_eq!(marker("change"), Some(true));
     assert_eq!(marker("read"), Some(false));
     assert_eq!(marker("old"), Some(true));
@@ -821,4 +827,55 @@ async fn the_servers_flag_decides_whether_an_attempt_is_a_change() {
         c.result(&h.manager, "change").await.outcome(),
         Outcome::Uncertain
     );
+}
+
+#[tokio::test]
+async fn an_acknowledged_attempt_is_not_sent_again_and_is_waited_for_until_its_files_go() {
+    let h = harness();
+    let mut c = Collector::default();
+    for id in ["bg", "now"] {
+        h.manager
+            .accept(assignment(id, "test", "echo", r#"{"hello":"world"}"#));
+        assert_eq!(c.result(&h.manager, id).await.outcome(), Outcome::Succeeded);
+    }
+
+    // Acknowledged, files not removed yet: what the background removal goes through.
+    assert_eq!(h.manager.begin_ack("bg"), Some(true));
+    assert_eq!(h.manager.begin_ack("bg"), None, "a second ack does nothing");
+    let again = h.manager.collect(&mut SessionCursor::default());
+    assert!(
+        again.iter().all(|m| match &m.kind {
+            Some(Kind::Started(s)) => s.attempt_id != "bg",
+            Some(Kind::Log(l)) => l.attempt_id != "bg",
+            Some(Kind::Result(r)) => r.attempt_id != "bg",
+            _ => true,
+        }),
+        "{again:?}"
+    );
+    h.manager
+        .accept(assignment("bg", "test", "echo", r#"{"hello":"world"}"#));
+    assert!(h.manager.is_idle(), "the same assignment is not run again");
+    assert_eq!(
+        h.manager.unacknowledged(),
+        2,
+        "a draining agent waits for it"
+    );
+    assert!(h.outbox_dir.join("bg.json").exists());
+
+    h.manager.remove_acknowledged("bg", true);
+    assert_eq!(h.manager.unacknowledged(), 1);
+    assert!(!h.outbox_dir.join("bg.json").exists());
+    assert!(!h.work.join("bg").exists());
+
+    // As the connection does it.
+    h.manager.ack_in_background("now");
+    for _ in 0..200 {
+        if h.manager.unacknowledged() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(h.manager.unacknowledged(), 0);
+    assert!(!h.outbox_dir.join("now.json").exists());
+    assert!(!h.work.join("now").exists());
 }
