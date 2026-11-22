@@ -119,6 +119,7 @@ public sealed class WorkflowReader
         string? inputs = null;
         JsonSchema? schema = null;
         JsonObject? schemaJson = null;
+        JsonSchema? attachedSchema = null;
         if (json["inputs"] is JsonValue inputsValue)
         {
             inputs = Resolve(directory, inputsValue.GetValue<string>(), allowModules: false, out var why);
@@ -136,6 +137,7 @@ public sealed class WorkflowReader
                     var schemaText = File.ReadAllText(Path.Combine(_root, inputs));
                     schema = SchemaCatalog.BuildUntrusted(schemaText);
                     schemaJson = JsonNode.Parse(schemaText) as JsonObject;
+                    attachedSchema = AttachedSchema(schema, schemaJson);
                 }
                 catch (Exception e) when (e is System.Text.Json.JsonException or JsonSchemaException or InvalidOperationException or ArgumentException)
                 {
@@ -314,6 +316,7 @@ public sealed class WorkflowReader
             Valid = errors == 0,
             Schema = schema,
             SchemaJson = schemaJson,
+            AttachedSchema = attachedSchema,
             Reports = reports,
             Peers = peers,
         };
@@ -353,6 +356,23 @@ public sealed class WorkflowReader
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// The inputs schema an attached guest is checked against: the workflow's own, with <c>hardware</c> and <c>network</c> taken out
+    /// of its top-level <c>required</c>. No machine stage ever runs for an attached guest, so they describe nothing Octopushy acts on.
+    /// </summary>
+    private static JsonSchema AttachedSchema(JsonSchema schema, JsonObject? schemaJson)
+    {
+        if (schemaJson?["required"] is not JsonArray required
+            || !required.Any(r => r?.GetValueKind() == System.Text.Json.JsonValueKind.String && r.GetValue<string>() is "hardware" or "network"))
+            return schema;
+        var relaxed = schemaJson.DeepClone().AsObject();
+        relaxed["required"] = new JsonArray(required
+            .Where(r => r?.GetValueKind() != System.Text.Json.JsonValueKind.String || r.GetValue<string>() is not ("hardware" or "network"))
+            .Select(r => r?.DeepClone())
+            .ToArray());
+        return SchemaCatalog.BuildUntrusted(relaxed.ToJsonString());
     }
 
     /// <summary>

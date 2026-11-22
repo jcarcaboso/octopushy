@@ -119,6 +119,32 @@ public sealed record WorkflowDefinition(
     /// <summary>The inputs schema as written, served to forms; null when it has none or it is not a valid schema.</summary>
     public JsonObject? SchemaJson { get; init; }
 
+    /// <summary>
+    /// <see cref="Schema"/> as an attached guest is checked against it: <c>hardware</c> and <c>network</c> are not required, since
+    /// no machine stage ever reads them, and what such a guest does write is still checked.
+    /// </summary>
+    public JsonSchema? AttachedSchema { get; init; }
+
+    /// <summary>
+    /// What this workflow's inputs schema finds wrong with a guest definition's <c>hardware</c>, <c>network</c> and <c>inputs</c>.
+    /// An attached guest may leave out <c>hardware</c> and <c>network</c>; see <see cref="AttachedSchema"/>.
+    /// </summary>
+    public IReadOnlyList<Schemas.SchemaError> EvaluateGuest(JsonObject guest)
+    {
+        var attached = guest["machine"] is JsonValue machine && machine.TryGetValue<string>(out var text) && text == GuestMachines.Attached;
+        if ((attached ? AttachedSchema : Schema) is not { } schema)
+            return [];
+        var instance = new JsonObject();
+        foreach (var section in new[] { "hardware", "network" })
+        {
+            // A section left as null would fail its type: an attached guest that leaves one out has none to check.
+            if (!attached || guest[section] is not null)
+                instance[section] = guest[section]?.DeepClone();
+        }
+        instance["inputs"] = guest["inputs"]?.DeepClone() ?? new JsonObject();
+        return Schemas.SchemaCatalog.Evaluate(schema, instance);
+    }
+
     /// <summary>For a workflow from a workflows repository, the repository it was released from; null for one kept in the lab repository.</summary>
     public string? Repository { get; init; }
 

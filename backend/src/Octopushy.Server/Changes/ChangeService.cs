@@ -67,9 +67,7 @@ public sealed partial class ChangeService(
             return Empty(resource, name, blocked ?? "The definition is not in the head revision.");
         var text = (await mirror.ReadFileAsync(head.Commit, file, ct))?.Text;
         var upgrade = reference is null ? null : await catalog.NewerMajorAsync(db, head.WorkflowsRepository, reference, ct);
-        var fieldIssues = workflow?.Schema is { } schema
-            ? SchemaCatalog.Evaluate(schema, Instance(resource.Kind, json)).Select(e => new FieldIssueDto(e.Pointer, e.Message)).ToList()
-            : [];
+        var fieldIssues = SchemaIssues(workflow, resource.Kind, json).ToList();
         return new ChangeFormDto(resource.Id, resource.Kind, resource.Address, name, head.Commit, file, text,
             json["workflow"]?.ToString(), workflow is null ? null : WorkflowCatalog.Version(workflow, head.Commit),
             resource.Kind == ResourceKinds.Guest ? json["hardware"]?.DeepClone() : null,
@@ -588,15 +586,18 @@ public sealed partial class ChangeService(
         return (entry?.File ?? resource.DefinitionFile, entry?.Json, null, null);
     }
 
-    /// <summary>What a workflow's inputs schema validates for a resource: a guest's hardware, network and inputs, a service's inputs.</summary>
-    private static JsonObject Instance(string kind, JsonObject json) => kind == ResourceKinds.Guest
-        ? new JsonObject
-        {
-            ["hardware"] = json["hardware"]?.DeepClone(),
-            ["network"] = json["network"]?.DeepClone(),
-            ["inputs"] = json["inputs"]?.DeepClone() ?? new JsonObject(),
-        }
-        : new JsonObject { ["inputs"] = json["inputs"]?.DeepClone() ?? new JsonObject() };
+    /// <summary>
+    /// What a workflow's inputs schema finds wrong with a resource: a guest's hardware, network and inputs, which an attached guest
+    /// may leave out, and a service's inputs.
+    /// </summary>
+    private static IEnumerable<FieldIssueDto> SchemaIssues(WorkflowDefinition? workflow, string kind, JsonObject json)
+    {
+        IReadOnlyList<SchemaError> errors = workflow is null ? []
+            : kind == ResourceKinds.Guest ? workflow.EvaluateGuest(json)
+            : workflow.Schema is { } schema ? SchemaCatalog.Evaluate(schema, new JsonObject { ["inputs"] = json["inputs"]?.DeepClone() ?? new JsonObject() })
+            : [];
+        return errors.Select(e => new FieldIssueDto(e.Pointer, e.Message));
+    }
 
     /// <summary>
     /// The candidate's problems placed on form fields: the resolved workflow's schema errors, at their pointers, and every
@@ -610,8 +611,7 @@ public sealed partial class ChangeService(
         var repository = (await revisions.ResolveAsync(candidate, releases, ct)).Repository;
         var workflow = composed.ResourceKind == ResourceKinds.Guest ? repository.Guest(composed.Address)?.Workflow : repository.Service(composed.Address)?.Workflow;
         var issues = new List<FieldIssueDto>();
-        if (workflow?.Schema is { } schema)
-            issues.AddRange(SchemaCatalog.Evaluate(schema, Instance(composed.ResourceKind, composed.Desired)).Select(e => new FieldIssueDto(e.Pointer, e.Message)));
+        issues.AddRange(SchemaIssues(workflow, composed.ResourceKind, composed.Desired));
         IReadOnlyDictionary<string, int> lines;
         try
         {

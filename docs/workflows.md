@@ -124,7 +124,9 @@ layout, and the lab repository has neither.
     since Octopushy made no key for it. Once synced, **Attach** on the guest's page starts an attach run, recorded as that
     person's decision: it verifies the VM at that VMID, on that host, of that kind, turns its protection on, and binds the
     guest to it. An attached guest never has a provision or retire run: nothing plans, replaces or deletes its machine.
-    Retiring it, or deleting its folder, detaches it. A guest that was attached stays `machine: attached`.
+    So it may leave out `hardware` and `network` even when its workflow's inputs schema lists them in its top-level
+    `required`; what it does write is still checked against that schema. Retiring it, or deleting its folder, detaches it. A guest that was attached stays
+    `machine: attached`.
 
     If the entire server has been removed from Git and is offline or permanently gone, use **Force delete server** in its
     inventory node details or installation page after syncing the repository. Type the installation address to confirm.
