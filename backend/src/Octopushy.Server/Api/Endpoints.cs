@@ -996,6 +996,8 @@ public static partial class Endpoints
 
     private static async Task<RepositoryDto> RepositoryAsync(OctopushyDb db, Views views, CancellationToken ct, bool workflows = true, RepositorySync? sync = null)
     {
+        // Read before the revision: a response never pairs a sync that has ended with the revision from before it.
+        var progress = sync?.Progress;
         var settings = await db.RepositorySettings.AsNoTracking().Where(r => r.Id == 1).FirstOrDefaultAsync(ct) ?? new RepositorySettings();
         var credentialSet = await db.StoreEntries.AsNoTracking().AnyAsync(e => e.Key == RepositorySync.CredentialKey, ct);
         return new RepositoryDto(
@@ -1011,7 +1013,7 @@ public static partial class Endpoints
             await views.LatestRevisionAsync(ct),
             workflows ? await views.WorkflowsAsync(settings, ct) : null,
             views.WorkflowTrust(settings),
-            sync?.Progress is { } progress
+            progress is not null
                 ? new RepositorySyncDto(progress.Phase, progress.StartedAt, progress.Commit, progress.Subject, progress.Author)
                 : null);
     }

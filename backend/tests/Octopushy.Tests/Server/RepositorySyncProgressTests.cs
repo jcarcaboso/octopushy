@@ -92,8 +92,9 @@ public class RepositorySyncProgressTests(PostgresFixture postgres) : IClassFixtu
         await UntilGitGateTakenAsync(server);
         RepositorySyncDto? fetched;
         // If the test queued before the sync's pick, the sync waits behind it: pass the gate on once and hold it again.
-        while ((fetched = await WithinAsync(client, RepositorySyncPhases.Workflows, TimeSpan.FromSeconds(2))) is null)
+        for (var attempt = 0; (fetched = await WithinAsync(client, RepositorySyncPhases.Workflows, TimeSpan.FromSeconds(2))) is null; attempt++)
         {
+            Assert.True(attempt < 5, "The sync never reported the workflows phase.");
             var next = HoldEngineAsync(server);
             held.Release();
             held = await next;

@@ -25,7 +25,7 @@ export type SyncView = {
   cancel: () => void;
 };
 
-type Run = { baseId: string | null; baseCommit: string | null; last: RepositorySync };
+type Run = { baseId: string | null; baseCommit: string | null; baseFetchAt: string | null; last: RepositorySync };
 type Ended = { kind: "up-to-date"; sync: RepositorySync } | { kind: "landed"; id: string };
 
 /** What the page shows of a sync: the server's progress, the gap before it, and what it ended with. */
@@ -46,15 +46,20 @@ export function useRepositorySync(repository: Repository | undefined): SyncView 
   const live: RepositorySync | null =
     server ?? (request ? { phase: "fetch", startedAt: "", commit: null, subject: null, author: null } : null);
   if (live && !run) {
-    setRun({ baseId: repository?.revision?.id ?? null, baseCommit: repository?.revision?.commit ?? null, last: live });
+    setRun({ baseId: repository?.revision?.id ?? null, baseCommit: repository?.revision?.commit ?? null, baseFetchAt: lastFetchAt, last: live });
     setEnded(null);
   } else if (live && run && (run.last.phase !== live.phase || run.last.commit !== live.commit)) {
     setRun({ ...run, last: live });
   } else if (!live && run) {
     setRun(null);
     const id = repository?.revision?.id ?? null;
+    // Up to date only when a fetch is known to have found the current head again: not a request that was refused or
+    // expired, not a failed fetch, not a new commit held back by a workflows source waiting for trust.
+    const fetched = run.last.commit !== null || lastFetchAt !== run.baseFetchAt;
+    const same = run.last.commit === null || run.last.commit === run.baseCommit;
     if (id && id !== run.baseId) setEnded({ kind: "landed", id });
-    else if (!repository?.lastFetchError) setEnded({ kind: "up-to-date", sync: run.last });
+    else if (fetched && same && !repository?.lastFetchError && !repository?.workflowsTrust?.pending)
+      setEnded({ kind: "up-to-date", sync: run.last });
   }
 
   useEffect(() => {

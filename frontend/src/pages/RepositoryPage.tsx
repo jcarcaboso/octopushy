@@ -524,6 +524,8 @@ export function RepositoryPage() {
             disabled={!data.url || sync.isPending || progress.live !== null}
             onClick={() => {
               progress.request();
+              // Look often until the server reports the sync; then the repository query polls every second by itself.
+              setWatching(true);
               sync.mutate(undefined, { onError: progress.cancel });
             }}
           >

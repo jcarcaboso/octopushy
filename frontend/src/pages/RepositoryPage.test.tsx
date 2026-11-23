@@ -158,6 +158,22 @@ describe("repository page", () => {
     expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled();
   });
 
+  it("unlocks Sync now without claiming success when the request is refused", async () => {
+    const user = userEvent.setup();
+    mockApi({
+      "GET /api/repository": () => repository(),
+      "GET /api/repository/revisions": () => [revision()],
+      "POST /api/repository/sync": () =>
+        new Response(JSON.stringify({ status: 503, title: "Unavailable" }), { status: 503, headers: { "content-type": "application/problem+json" } }),
+    });
+    renderAt(<RepositoryPage />, { path: "/repository", route: "/repository" });
+
+    await user.click(await screen.findByRole("button", { name: "Sync now" }));
+    expect(await screen.findByText("Unavailable")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled();
+    expect(screen.queryByText(/Up to date/)).not.toBeInTheDocument();
+  });
+
   it("opens the settings when no repository is connected", async () => {
     mockApi({
       "GET /api/repository": () => ({ ...repository(), url: null, lastFetchAt: null, headCommit: null, revision: null }),
