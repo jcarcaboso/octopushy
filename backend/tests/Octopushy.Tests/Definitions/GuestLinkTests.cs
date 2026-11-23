@@ -10,7 +10,7 @@ public class GuestLinkTests
     private const string Links = """
         links:
           - { label: Open DNS admin, url: "https://10.15.30.11:53443/" }
-          - { label: Status, url: "http://dns-01.lab.test/status?full=1" }
+          - { label: Status, url: "http://dns-01.lab.test/status?full=1", check: true }
 
         """;
 
@@ -28,7 +28,7 @@ public class GuestLinkTests
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.True(repository.IsValid(Address), Errors(test));
         Assert.Equal(
-            [new GuestLink("Open DNS admin", "https://10.15.30.11:53443/"), new GuestLink("Status", "http://dns-01.lab.test/status?full=1")],
+            [new GuestLink("Open DNS admin", "https://10.15.30.11:53443/"), new GuestLink("Status", "http://dns-01.lab.test/status?full=1", true)],
             GuestDefinition.LinksOf(repository.Guest(Address)!.Json));
     }
 
@@ -38,6 +38,18 @@ public class GuestLinkTests
         using var test = TestRepository.Minimal();
         var repository = LabRepositoryLoader.Load(test.Root);
         Assert.Empty(GuestDefinition.LinksOf(repository.Guests[0].Json));
+    }
+
+    [Theory]
+    [InlineData("true")]
+    [InlineData("false")]
+    public void A_guest_link_can_opt_into_an_uptime_check(string check)
+    {
+        using var test = TestRepository.Minimal();
+        Append(test, $"links:\n  - {{ label: HA, url: \"http://10.15.40.180/\", check: {check} }}\n");
+        var repository = LabRepositoryLoader.Load(test.Root);
+        Assert.True(repository.IsValid(Address), Errors(test));
+        Assert.Equal(check == "true", Assert.Single(GuestDefinition.LinksOf(repository.Guest(Address)!.Json)).Check);
     }
 
     [Theory]
@@ -53,6 +65,7 @@ public class GuestLinkTests
     [InlineData("""{ label: "", url: "https://10.15.30.11:53443/" }""")]
     [InlineData("""{ label: "  ", url: "https://10.15.30.11:53443/" }""")]
     [InlineData("""{ label: Admin, url: "https://10.15.30.11:53443/", uptime: true }""")]
+    [InlineData("""{ label: Admin, url: "https://10.15.30.11/", check: "true" }""")]
     [InlineData("\"https://10.15.30.11:53443/\"")]
     public void A_link_must_be_a_labeled_http_url_without_credentials(string link)
     {

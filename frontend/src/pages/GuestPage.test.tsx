@@ -96,6 +96,17 @@ describe("GuestPage", () => {
     expect(screen.queryByRole("region", { name: /waits for your approval/ })).toBeNull();
   });
 
+  it("shows an attached machine's HTTP uptime without an SSH address", async () => {
+    mockApi({
+      "GET /api/guests/guest-1": () => detail({}, { observed, accessAddress: null }),
+      "GET /api/uptime": () => ({ checks: [{ ...ssh, kind: "guest-http", url: "http://10.15.40.180/", detail: "HTTP 200" }] }),
+    });
+    renderAt(<GuestPage />, route);
+    expect(await screen.findByText("HTTP, 30 days")).toBeInTheDocument();
+    expect(screen.getByText("99.5%")).toBeInTheDocument();
+    expect(screen.queryByText("SSH, 30 days")).not.toBeInTheDocument();
+  });
+
   it("opens the links its definition names in a new tab, and none when it names none", async () => {
     mockApi({ "GET /api/guests/guest-1": () => detail({}, { links: [{ label: "Open DNS admin", url: "https://10.15.30.11:53443/" }] }) });
     const { unmount } = renderAt(<GuestPage />, route);

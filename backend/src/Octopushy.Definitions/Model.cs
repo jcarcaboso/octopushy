@@ -169,23 +169,24 @@ public sealed record GuestDefinition(
     public WorkflowStage? Setup => Workflow?.Setup;
 
     /// <summary>
-    /// Pages people open for the guest, from <c>links</c> in <c>guest.yaml</c>: shown on its page, never checked and never part
-    /// of what a run does. Only labeled, absolute http and https URLs with a host and no credentials are kept.
+    /// Pages people open for the guest, from <c>links</c> in <c>guest.yaml</c>: shown on its page, checked only with
+    /// <c>check: true</c>, and never part of what a run does. Only labeled, absolute http and https URLs with a host and no credentials are kept.
     /// </summary>
     public static IReadOnlyList<GuestLink> LinksOf(JsonNode? definition) =>
         (definition?["links"] as JsonArray)?
             .OfType<JsonObject>()
             .Select(l => (Label: l["label"] is JsonValue label && label.TryGetValue<string>(out var text) ? text.Trim() : null,
-                Url: l["url"] is JsonValue url && url.TryGetValue<string>(out var href) ? href : null))
+                Url: l["url"] is JsonValue url && url.TryGetValue<string>(out var href) ? href : null,
+                Check: l["check"] is JsonValue check && check.TryGetValue<bool>(out var enabled) && enabled))
             .Where(l => !string.IsNullOrEmpty(l.Label)
                 && Uri.TryCreate(l.Url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" && uri.Host.Length > 0
                 && uri.UserInfo.Length == 0)
-            .Select(l => new GuestLink(l.Label!, l.Url!))
+            .Select(l => new GuestLink(l.Label!, l.Url!, l.Check))
             .ToList() ?? [];
 }
 
 /// <summary>A page people open for a guest, from <c>links</c> in <c>guest.yaml</c>.</summary>
-public sealed record GuestLink(string Label, string Url);
+public sealed record GuestLink(string Label, string Url, bool Check = false);
 
 /// <summary>What a guest's <c>machine</c> says of how its machine came to be.</summary>
 public static class GuestMachines

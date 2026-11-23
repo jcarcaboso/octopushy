@@ -45,6 +45,74 @@ public class UptimeTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
         _ => new() { ProbeId = probe.ProbeId, Status = "reachable", HttpStatus = 200, ElapsedMs = 12 },
     };
 
+    [Theory]
+    [InlineData("attached")]
+    [InlineData("managed")]
+    public async Task A_guest_checks_only_opted_in_links_without_an_ssh_address(string machine)
+    {
+        using var repository = TestRepository.Minimal();
+        const string guestFile = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        const string address = "home/korriban/krb-app-01";
+        const string links = """
+            schemaVersion: 1
+            type: vm
+            machine: attached
+            host: korriban
+            vmid: 500
+            workflow: test-vm@1
+            links:
+              - { label: HA, url: "http://10.15.40.180:8123/", check: true }
+              - { label: Status, url: "https://ha.lab.test/health?full=1", check: true }
+              - { label: Console, url: "https://ha.lab.test/admin" }
+              - { label: Disabled, url: "http://ha.lab.test/disabled", check: false }
+              - { label: Same HA URL, url: "http://10.15.40.180:8123/", check: true }
+            """;
+        var definition = links.Replace("machine: attached", $"machine: {machine}", StringComparison.Ordinal);
+        repository.Write(guestFile, definition);
+        var clock = new TestClock { Now = Start };
+        await using var server = await ServerHarness.StartAsync(postgres, repository, clock: clock);
+        var monitor = server.Services.GetRequiredService<UptimeMonitor>();
+        await server.SyncAsync();
+        await monitor.TickAsync(CancellationToken.None);
+        Assert.Empty(monitor.Targets);
+        await server.SyncAndTrustAsync();
+        var probes = new List<ReachabilityProbe>();
+        await server.ConnectUptimeAgentAsync("checker", p => { probes.Add(p); return Lab(p); });
+        clock.Now = Start.AddMinutes(1);
+        await monitor.TickAsync(CancellationToken.None);
+        clock.Now = Start.AddMinutes(2);
+        await monitor.TickAsync(CancellationToken.None);
+
+        var targets = monitor.Targets.Where(t => t.Resource == address).ToList();
+        Assert.Equal(["guest-http", "guest-http"], targets.Select(t => t.Kind));
+        Assert.DoesNotContain(monitor.Targets, t => t.Kind == UptimeTarget.GuestSsh);
+        Assert.Equal(
+            [("http", "10.15.40.180", 8123u, "/", false), ("http", "ha.lab.test", 443u, "/health?full=1", true)],
+            probes.Where(p => p.Protocol == "http").Select(p => (p.Protocol, p.Host, p.Port, p.Path, p.Tls)));
+        var checks = await server.QueryAsync(db => db.UptimeChecks.Where(c => c.Key.StartsWith("guest-http|")).ToListAsync());
+        Assert.Equal(2, checks.Count);
+        Assert.Contains(checks, c => c.Up && c.Detail == "HTTP 200");
+        Assert.Contains(checks, c => !c.Up && c.Detail == "HTTP 503");
+
+        using var client = await server.SignedInClientAsync();
+        var report = await client.GetFromJsonAsync<JsonObject>("/api/uptime");
+        Assert.Equal(2, report!["checks"]!.AsArray().Count(c => c?["resource"]?.GetValue<string>() == address));
+
+        repository.Write(guestFile, definition.Replace("check: true", "check: false", StringComparison.Ordinal));
+        server.Commit("Disable the guest HTTP checks");
+        await server.SyncAsync();
+        clock.Now = Start.AddMinutes(3);
+        await monitor.TickAsync(CancellationToken.None);
+        Assert.DoesNotContain(monitor.Targets, t => t.Resource == address);
+
+        repository.Write(guestFile, definition + "\nlifecycle: retired\n");
+        server.Commit("Retire the guest");
+        await server.SyncAsync();
+        clock.Now = Start.AddMinutes(4);
+        await monitor.TickAsync(CancellationToken.None);
+        Assert.DoesNotContain(monitor.Targets, t => t.Resource == address);
+    }
+
     [Fact]
     public async Task Nothing_is_checked_until_the_installation_is_trusted()
     {
