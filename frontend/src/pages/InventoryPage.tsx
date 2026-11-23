@@ -355,7 +355,7 @@ function MachineDetail({ node, machine, span }: { node: NodeEntry; machine: Mach
           ) : null}
         </dl>
       </section>
-      <UptimeSection title="SSH" checks={machine.checks} span={span} empty="Not checked: no address is known for this machine." />
+      <UptimeSection title="Uptime" checks={machine.checks} span={span} empty="Not checked: no SSH address or checked HTTP link is configured for this machine." />
     </>
   );
 }

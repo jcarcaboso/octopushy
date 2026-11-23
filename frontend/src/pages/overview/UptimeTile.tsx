@@ -6,12 +6,12 @@ import { DayStrip } from "../../components/DayStrip";
 import { RelativeTime } from "../../components/RelativeTime";
 import { Skeleton } from "../../components/States";
 import { plural } from "../../lib/format";
-import { formatPercent, isServiceCheck } from "../../lib/inventory";
+import { formatPercent, isMachineCheck, isServiceCheck } from "../../lib/inventory";
 import { Figure, Tile } from "./Tile";
 
 const kinds = [
   { kind: "proxmox-api", label: "Nodes", of: (c: UptimeCheck) => c.kind === "proxmox-api" },
-  { kind: "guest-ssh", label: "Machines", of: (c: UptimeCheck) => c.kind === "guest-ssh" },
+  { kind: "machine", label: "Machines", of: isMachineCheck },
   { kind: "service", label: "Services", of: isServiceCheck },
 ];
 

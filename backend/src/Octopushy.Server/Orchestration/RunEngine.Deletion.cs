@@ -71,8 +71,8 @@ public sealed partial class RunEngine
                 await db.DeletedStoreKeys.Where(e => internalKeys.Contains(e.Key)).ExecuteDeleteAsync(ct);
                 await db.InstallationSnippetKeys.Where(k => k.Installation == address).ExecuteDeleteAsync(ct);
                 await db.InstallationTrusts.Where(t => t.Address == address).ExecuteDeleteAsync(ct);
-                var checkPrefixes = new[] { $"proxmox-api|{prefix}", $"guest-ssh|{prefix}", $"service-http|{prefix}", $"service-tcp|{prefix}" }
-                    .Concat(addresses.SelectMany(a => new[] { $"guest-ssh|{a}|", $"service-http|{a}|", $"service-tcp|{a}|" })).ToList();
+                var checkPrefixes = new[] { $"proxmox-api|{prefix}", $"guest-ssh|{prefix}", $"guest-http|{prefix}", $"service-http|{prefix}", $"service-tcp|{prefix}" }
+                    .Concat(addresses.SelectMany(a => new[] { $"guest-ssh|{a}|", $"guest-http|{a}|", $"service-http|{a}|", $"service-tcp|{a}|" })).ToList();
                 await db.UptimeBuckets.Where(b => checkPrefixes.Any(p => b.CheckKey.StartsWith(p))).ExecuteDeleteAsync(ct);
                 await db.UptimeChecks.Where(c => checkPrefixes.Any(p => c.Key.StartsWith(p))).ExecuteDeleteAsync(ct);
                 await resources.ExecuteDeleteAsync(ct);

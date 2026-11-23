@@ -133,6 +133,22 @@ it("shows node, VM and type for a machine run and a service run", async () => {
   expect(service).toHaveTextContent("Service app");
 });
 
+it("includes HTTP checks in machine uptime", async () => {
+  mockApi({
+    "GET /api/overview": () => overview(),
+    "GET /api/uptime": () => ({
+      ...uptime,
+      checks: [check({ key: "ha", kind: "guest-http", resource: "home/pve01/ha" })],
+    }),
+    "GET /api/agents": () => agents,
+  });
+  renderAt(<OverviewPage />, { path: "/", route: "/" });
+  const up = await tile("Up, 30 days");
+  expect(await within(up).findByText("Machines")).toBeInTheDocument();
+  expect(within(up).getByText("1 of 1 up")).toBeInTheDocument();
+  expect(within(up).queryByText("Services")).not.toBeInTheDocument();
+});
+
 it("counts up and pending checks by kind and names what is down", async () => {
   serve();
   const up = await tile("Up, 30 days");

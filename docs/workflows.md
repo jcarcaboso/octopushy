@@ -774,7 +774,7 @@ secrets:                          # extra var -> store key; only the playbook ge
   machine_tools_token: { store: proxmox/korriban/krb-app-01/machine_tools_token }
 schedules:                        # actions of the workflow, in cron, in the lab's timezone
   - { action: update-tools, cron: "0 6 * * *" }
-links:                            # pages people open for it: shown beside Open in Proxmox, never run or checked
+links:                            # shown beside Open in Proxmox, never run; check: true opts into HTTP uptime
   - { label: Open admin console, url: "https://10.1.0.31:8443/" }
 access:
   user: ops
@@ -806,8 +806,9 @@ run. The guest's page lists each action that takes its own approval, and where i
 **A guest's `links` are pages people open for it,** such as an appliance's admin console that no service manages. Its
 page and its Inventory details show each one as a button labeled with its `label`, beside Open in Proxmox, which opens
 it in a new tab. Each `url` is an absolute `http` or `https` URL with a host and no user name or password; at most 16.
-Links are display metadata only: changing them starts no provision, configure or service run, and no uptime check
-probes them. A guest's link has no `tcp://` form, and is not listed on the Services page: a service's
+Changing links starts no provision, configure or service run. They are display-only by default; a link with `check: true`
+also gets the same HTTP uptime probe and history as a service link, without SSH access. See [uptime](uptime.md).
+A guest's link has no `tcp://` form, and is not listed on the Services page: a service's
 [links](#service) do that.
 
 `secrets`, `secretFiles`, `schedules` and `policy.actions` need a workflow with a setup stage, and so does `access.user` for it to log in.

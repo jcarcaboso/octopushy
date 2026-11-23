@@ -12,7 +12,7 @@ namespace Octopushy.Server.Uptime;
 /// Stable while what is checked stays the same: the kind, the subject and <paramref name="Url"/>. A new address, endpoint or
 /// link is a new check, with its own history.
 /// </param>
-/// <param name="Kind"><c>proxmox-api</c>, <c>guest-ssh</c>, <c>service-http</c>, or <c>service-tcp</c> for a <c>tcp://</c> link.</param>
+/// <param name="Kind"><c>proxmox-api</c>, <c>guest-ssh</c>, <c>guest-http</c>, <c>service-http</c>, or <c>service-tcp</c> for a <c>tcp://</c> link.</param>
 /// <param name="Installation">The installation it belongs to, <c>lab/installation</c>.</param>
 /// <param name="Host">
 /// The Proxmox host: the host whose API endpoint this is, or the guest's host. Null for an API endpoint several hosts share,
@@ -36,6 +36,7 @@ public sealed record UptimeTarget(
 {
     public const string ProxmoxApi = "proxmox-api";
     public const string GuestSsh = "guest-ssh";
+    public const string GuestHttp = "guest-http";
     public const string ServiceHttp = "service-http";
     public const string ServiceTcp = "service-tcp";
 
@@ -45,7 +46,7 @@ public sealed record UptimeTarget(
     /// <summary>
     /// What to check, from the head revision of the current repository source when it is valid, for installations an
     /// operator trusted in the mode they are in now: their hosts' API endpoints that the trust covers, the SSH address of
-    /// each active guest, and the links of its services. Nothing from an untrusted installation is checked.
+    /// each active guest, its opted-in HTTP links, and the links of its services. Nothing from an untrusted installation is checked.
     /// </summary>
     public static async Task<IReadOnlyList<UptimeTarget>> ForAsync(OctopushyDb db, RevisionCache revisions, CancellationToken cancellationToken)
     {
@@ -89,6 +90,13 @@ public sealed record UptimeTarget(
                     var url = $"ssh://{(address.Contains(':') ? $"[{address}]" : address)}:{port}";
                     targets.Add(new($"{GuestSsh}|{guest.Address}|{url}", GuestSsh, installation.Address, guest.Host, guest.Address, url,
                         "ssh", address, port, null, null, false));
+                }
+
+                foreach (var link in GuestDefinition.LinksOf(guest.Json).Where(l => l.Check))
+                {
+                    var uri = new Uri(link.Url);
+                    targets.Add(new($"{GuestHttp}|{guest.Address}|{link.Url}", GuestHttp, installation.Address, guest.Host, guest.Address,
+                        link.Url, "http", uri.DnsSafeHost, uri.Port, uri.DnsSafeHost, uri.PathAndQuery, uri.Scheme == Uri.UriSchemeHttps));
                 }
 
                 foreach (var service in repository.Services.Where(s => s.GuestAddress == guest.Address).OrderBy(s => s.Address, StringComparer.Ordinal))

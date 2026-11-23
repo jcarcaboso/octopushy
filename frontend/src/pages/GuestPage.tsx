@@ -29,7 +29,7 @@ import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { useHashScroll } from "../components/useHashScroll";
 import { readDefinition, type DefinitionField, type DefinitionSection } from "../lib/definition";
 import { formatBytes, humanize, machineNoun } from "../lib/format";
-import { formatPercent, percentOf } from "../lib/inventory";
+import { formatPercent, isMachineCheck, percentOf } from "../lib/inventory";
 import { formatUptime } from "../lib/time";
 import { WaitingRun } from "./run/WaitingRun";
 
@@ -92,12 +92,13 @@ function disks(sections: DefinitionSection[] | null): { value: string; note: str
   return { value: total, note: `${sizes.length} disks` };
 }
 
-/** The guest's figures: power, size, address and how its SSH answers. */
+/** The guest's figures: power, size, address and how its SSH or HTTP checks answer. */
 function GuestGlance({ data, sections }: { data: GuestDetail; sections: DefinitionSection[] | null }) {
   const { data: uptime } = useUptime();
   const { guest } = data;
   const vm = guest.observed;
-  const ssh = uptime?.checks.find((c) => c.kind === "guest-ssh" && c.resource === guest.address);
+  const checks = (uptime?.checks ?? []).filter((c) => isMachineCheck(c) && c.resource === guest.address);
+  const check = checks.find((c) => c.status === "down") ?? checks.find((c) => c.status === "up") ?? checks[0];
   const cores = vm?.maxCpu ?? text(field(sections, "hardware", "cores"));
   const memory = vm?.maxMemoryBytes ? formatBytes(vm.maxMemoryBytes) : text(field(sections, "hardware", "memory"));
   const disk = disks(sections);
@@ -114,14 +115,14 @@ function GuestGlance({ data, sections }: { data: GuestDetail; sections: Definiti
         memory ? { label: "Memory", value: memory, note: vm?.maxMemoryBytes ? "observed" : "declared" } : null,
         disk ? { label: "Disk", value: disk.value, note: disk.note } : null,
         guest.accessAddress ? { label: "Address", value: <span className="mono">{guest.accessAddress}</span>, note: network || null } : null,
-        ssh
+        check
           ? {
-              label: "SSH, 30 days",
-              value: formatPercent(percentOf([ssh], "month")),
+              label: `${checks.every((c) => c.kind === "guest-ssh") ? "SSH" : checks.every((c) => c.kind === "guest-http") ? "HTTP" : "Uptime"}, 30 days`,
+              value: formatPercent(percentOf(checks, "month")),
               note:
-                ssh.status === "up" && ssh.elapsedMs !== null
-                  ? `answers in ${ssh.elapsedMs} ms`
-                  : (ssh.detail ?? (ssh.status === "down" ? "Down" : "Not checked yet")),
+                check.status === "up" && check.elapsedMs !== null
+                  ? `answers in ${check.elapsedMs} ms`
+                  : (check.detail ?? (check.status === "down" ? "Down" : "Not checked yet")),
             }
           : null,
       ]}

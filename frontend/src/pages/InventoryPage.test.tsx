@@ -97,6 +97,22 @@ it("starts on the first node with a problem and opens Proxmox in that node's own
   expect(screen.getByText(/3 problems/)).toBeInTheDocument();
 });
 
+it("shows a machine's HTTP check and history without SSH", async () => {
+  mockApi({
+    "GET /api/inventory": () => inventory,
+    "GET /api/uptime": () => ({
+      ...uptime(),
+      checks: [check("guest-http", "home/pve01", "pve01", dns.address, "https://10.0.0.121:53443/", "up", 99.5)],
+    }),
+  });
+  renderAt(<InventoryPage />, { path: "/inventory", route: "/inventory?node=home/pve01/pve01&machine=home/pve01/dns" });
+  const details = await screen.findByRole("region", { name: "Details" });
+  expect(await within(details).findByRole("heading", { name: "Uptime" })).toBeInTheDocument();
+  expect(within(details).getByText("https://10.0.0.121:53443/")).toBeInTheDocument();
+  expect(within(details).getAllByText("99.5%").length).toBeGreaterThan(0);
+  expect(within(details).queryByText("No check")).not.toBeInTheDocument();
+});
+
 it("shows the services column only for a machine that has services", async () => {
   const user = userEvent.setup();
   show("/inventory?node=home/pve01/pve01");

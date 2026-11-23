@@ -14,7 +14,7 @@
       "default": "managed"
     },
     "links": {
-      "description": "Pages people open for this guest, such as its own admin console, shown on its page beside Open in Proxmox. Each is an absolute http or https URL without credentials, and a label. Changing them runs nothing, and nothing checks them.",
+      "description": "Pages people open for this guest, such as its own admin console, shown on its page beside Open in Proxmox. Each is an absolute http or https URL without credentials, and a label. Changing them runs nothing. A link with check: true is checked for HTTP uptime by an agent.",
       "type": "array",
       "maxItems": 16,
       "items": {
@@ -25,7 +25,8 @@
             "maxLength": 80,
             "pattern": "^\\S(?:[^\\r\\n]*\\S)?(?![\\s\\S])"
           },
-          "url": { "type": "string", "maxLength": 2048, "pattern": "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[!-~]*)?(?![\\s\\S])" }
+          "url": { "type": "string", "maxLength": 2048, "pattern": "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[!-~]*)?(?![\\s\\S])" },
+          "check": { "type": "boolean", "default": false, "description": "Opt into the same HTTP uptime check as a service link. No SSH access or guest agent is needed." }
         },
         "required": ["label", "url"],
         "additionalProperties": false

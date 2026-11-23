@@ -172,6 +172,8 @@ public class InstallationDeletionTests(PostgresFixture postgres) : IClassFixture
             await UptimeMonitor.RecordAsync(db, ownKey, false, null, null, null, now, CancellationToken.None);
             await UptimeMonitor.RecordAsync(db, oldKey, false, null, null, null, now, CancellationToken.None);
             await UptimeMonitor.RecordAsync(db, movedKey, false, null, null, null, now, CancellationToken.None);
+            await UptimeMonitor.RecordAsync(db, $"guest-http|{guest.Address}|http://ha.lab.test/", false, null, null, null, now, CancellationToken.None);
+            await UptimeMonitor.RecordAsync(db, "guest-http|home/elsewhere/old|https://ha.lab.test/", false, null, null, null, now, CancellationToken.None);
             await UptimeMonitor.RecordAsync(db, otherKey, true, null, null, null, now, CancellationToken.None);
         });
         await using (var scope = server.Services.CreateAsyncScope())
