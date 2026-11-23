@@ -20,9 +20,59 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
 {
     public static readonly JsonSerializerOptions IssueJson = new(JsonSerializerDefaults.Web);
 
+    /// <summary>
+    /// Refreshes the applied head under this backend's validation rules, inside the sync transaction and engine gate.
+    /// Keep runtime/planning errors and historical revisions; do not reapply desired state or propose any work.
+    /// </summary>
+    public async Task RefreshValidationAsync(OctopushyDb db, DefinitionRevision revision, LabRepository repository, CancellationToken cancellationToken)
+    {
+        // Compare results, not a release marker, so installations predating this refresh need no migration.
+        // JSONB reorders object properties; compare decoded issues rather than serialized text.
+        var previousIssues = JsonSerializer.Deserialize<List<DefinitionIssue>>(revision.Issues, IssueJson) ?? [];
+        if (revision.RepositoryValid == repository.RepositoryValid
+            && revision.ErrorCount == repository.Issues.Count(i => i.Severity == IssueSeverity.Error)
+            && revision.WarningCount == repository.Issues.Count(i => i.Severity == IssueSeverity.Warning)
+            && previousIssues.SequenceEqual(repository.Issues))
+            return;
+
+        var previous = previousIssues.ToHashSet();
+        RecordValidation(revision, repository);
+
+        var active = await db.Resources.Where(r => r.RetiredAt == null).ToListAsync(cancellationToken);
+        var examined = new List<Resource>();
+        foreach (var resource in active.Where(r => r.LastRevisionId == revision.Id))
+        {
+            // Missing definitions and pending renames need inventory application, not a validation-only refresh.
+            var entry = repository.Resource(resource.Address);
+            if (entry is null) continue;
+            var issues = repository.IssuesFor(entry.Address).ToList();
+            issues.AddRange((JsonSerializer.Deserialize<List<DefinitionIssue>>(resource.Issues, IssueJson) ?? [])
+                .Where(i => !previous.Contains(i) && !issues.Contains(i)));
+            if (entry.Valid && entry.Kind == ResourceKind.Guest && repository.Guest(entry.Address) is { } guest
+                && await GuestProblemAsync(db, resource, guest, active, cancellationToken) is { } problem)
+            {
+                var issue = new DefinitionIssue(IssueSeverity.Error, guest.File, null, problem, resource.Address);
+                if (!issues.Contains(issue)) issues.Add(issue);
+            }
+            resource.Valid = entry.Valid && !issues.Any(i => i.Severity == IssueSeverity.Error);
+            resource.Issues = JsonSerializer.Serialize(issues, IssueJson);
+            examined.Add(resource);
+        }
+        await RecordIssuesAsync(db, revision, examined, cancellationToken);
+    }
+
+    private static void RecordValidation(DefinitionRevision revision, LabRepository repository)
+    {
+        revision.RepositoryValid = repository.RepositoryValid;
+        revision.ErrorCount = repository.Issues.Count(i => i.Severity == IssueSeverity.Error);
+        revision.WarningCount = repository.Issues.Count(i => i.Severity == IssueSeverity.Warning);
+        revision.Issues = JsonSerializer.Serialize(repository.Issues, IssueJson);
+    }
+
     /// <summary>Runs inside the engine's gate, with the revision already saved.</summary>
     public async Task ApplyAsync(OctopushyDb db, DefinitionRevision revision, LabRepository repository, CancellationToken cancellationToken)
     {
+        RecordValidation(revision, repository);
         var now = clock.GetUtcNow();
         var active = await db.Resources.Where(r => r.RetiredAt == null).ToListAsync(cancellationToken);
         var byAddress = active.ToDictionary(r => r.Address, StringComparer.Ordinal);
@@ -107,16 +157,11 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
             // Missing definitions still retain durable ownership. In particular,
             // an invalid rename must not let a second row claim a guest's VM.
             var definition = repository.Guest(resource.Address)!;
-            var problem = IdentityProblem(resource, definition, byAddress.Values);
             // A reservation is for one machine: a guest that is not bound yet and now names another lets it go.
             if (resource.BoundVmid is null && resource.ReservedVmid is not null
                 && (resource.ReservedVmid != definition.Vmid || resource.ReservedNode != definition.Host || resource.ReservedInstallation != definition.InstallationAddress))
                 (resource.ReservedInstallation, resource.ReservedNode, resource.ReservedVmid, resource.ReservedAt, resource.ReservationAppliedAt) = (null, null, null, null, null);
-            // A VM the installation's latest observation shows at this VMID, and that is not this guest's, for a
-            // provision and a retire alike. Observations are runtime data, so the dispatch of the plan asks again.
-            // An attached guest names a machine that exists and that it does not own yet, on purpose: a person attaches it.
-            if (problem is null && !definition.Attached)
-                problem = await SafetyBoundary.VmidCollisionAsync(db, resource, definition.InstallationAddress, definition.Vmid, cancellationToken);
+            var problem = await GuestProblemAsync(db, resource, definition, byAddress.Values, cancellationToken);
             if (problem is not null)
             {
                 resource.Valid = false;
@@ -473,6 +518,15 @@ public sealed partial class InventoryUpdater(RunFactory factory, RunEngine engin
 
         var other = guests.FirstOrDefault(r => r.Id != resource.Id && r.BoundVmid == guest.Vmid && r.BoundInstallation == guest.InstallationAddress);
         return other is null ? null : $"VMID {guest.Vmid} on {guest.InstallationAddress} is bound to {other.Address}.";
+    }
+
+    private static async Task<string?> GuestProblemAsync(OctopushyDb db, Resource resource, GuestDefinition guest,
+        IEnumerable<Resource> guests, CancellationToken cancellationToken)
+    {
+        var problem = IdentityProblem(resource, guest, guests);
+        // An attached guest deliberately names a VM it does not own yet.
+        return problem ?? (guest.Attached ? null
+            : await SafetyBoundary.VmidCollisionAsync(db, resource, guest.InstallationAddress, guest.Vmid, cancellationToken));
     }
 
     /// <summary>Whether the guest's last definition said <c>machine: attached</c>, or a person attached it.</summary>
