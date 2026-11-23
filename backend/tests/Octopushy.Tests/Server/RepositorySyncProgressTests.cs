@@ -88,23 +88,29 @@ public class RepositorySyncProgressTests(PostgresFixture postgres) : IClassFixtu
         // Held at the engine's gate right after the fetch: the head is known before it is validated or applied. Under the Git
         // gate the sync takes the engine once, to pick changes; the test lets that one through and holds the next.
         var held = await HoldEngineAsync(server);
-        gate.Dispose();
-        await UntilGitGateTakenAsync(server);
         RepositorySyncDto? fetched;
-        // If the test queued before the sync's pick, the sync waits behind it: pass the gate on once and hold it again.
-        for (var attempt = 0; (fetched = await WithinAsync(client, RepositorySyncPhases.Workflows, TimeSpan.FromSeconds(2))) is null; attempt++)
+        try
         {
-            Assert.True(attempt < 5, "The sync never reported the workflows phase.");
-            var next = HoldEngineAsync(server);
+            gate.Dispose();
+            await UntilGitGateTakenAsync(server);
+            // If the test queued before the sync's pick, the sync waits behind it: pass the gate on once and hold it again.
+            for (var attempt = 0; (fetched = await WithinAsync(client, RepositorySyncPhases.Workflows, TimeSpan.FromSeconds(2))) is null; attempt++)
+            {
+                Assert.True(attempt < 5, "The sync never reported the workflows phase.");
+                var next = HoldEngineAsync(server);
+                held.Release();
+                held = await next;
+            }
+        }
+        finally
+        {
             held.Release();
-            held = await next;
         }
         Assert.Equal(fetching.StartedAt, fetched.StartedAt);
         Assert.NotNull(fetched.Commit);
         Assert.False(string.IsNullOrEmpty(fetched.Subject));
         Assert.False(string.IsNullOrEmpty(fetched.Author));
 
-        held.Release();
         await running;
         var done = await RepositoryAsync(client);
         Assert.Null(done.Sync);

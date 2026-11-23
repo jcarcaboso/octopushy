@@ -25,7 +25,7 @@ export type SyncView = {
   cancel: () => void;
 };
 
-type Run = { baseId: string | null; baseCommit: string | null; baseFetchAt: string | null; last: RepositorySync };
+type Run = { baseId: string | null; baseCommit: string | null; baseFetchAt: string | null; baseSource: string; last: RepositorySync };
 type Ended = { kind: "up-to-date"; sync: RepositorySync } | { kind: "landed"; id: string };
 
 /** What the page shows of a sync: the server's progress, the gap before it, and what it ended with. */
@@ -36,6 +36,8 @@ export function useRepositorySync(repository: Repository | undefined): SyncView 
   const [ended, setEnded] = useState<Ended | null>(null);
   const server = repository?.sync ?? null;
   const lastFetchAt = repository?.lastFetchAt ?? null;
+  // A source changed during a sync clears its fetch time and revision; nothing then says the new one was fetched.
+  const source = `${repository?.url ?? ""} ${repository?.branch ?? ""}`;
 
   // Adjusted while rendering, from what the repository says now (react.dev: "storing information from previous renders").
   let request = requested;
@@ -46,7 +48,7 @@ export function useRepositorySync(repository: Repository | undefined): SyncView 
   const live: RepositorySync | null =
     server ?? (request ? { phase: "fetch", startedAt: "", commit: null, subject: null, author: null } : null);
   if (live && !run) {
-    setRun({ baseId: repository?.revision?.id ?? null, baseCommit: repository?.revision?.commit ?? null, baseFetchAt: lastFetchAt, last: live });
+    setRun({ baseId: repository?.revision?.id ?? null, baseCommit: repository?.revision?.commit ?? null, baseFetchAt: lastFetchAt, baseSource: source, last: live });
     setEnded(null);
   } else if (live && run && (run.last.phase !== live.phase || run.last.commit !== live.commit)) {
     setRun({ ...run, last: live });
@@ -55,7 +57,7 @@ export function useRepositorySync(repository: Repository | undefined): SyncView 
     const id = repository?.revision?.id ?? null;
     // Up to date only when a fetch is known to have found the current head again: not a request that was refused or
     // expired, not a failed fetch, not a new commit held back by a workflows source waiting for trust.
-    const fetched = run.last.commit !== null || lastFetchAt !== run.baseFetchAt;
+    const fetched = source === run.baseSource && (run.last.commit !== null || (lastFetchAt !== null && lastFetchAt !== run.baseFetchAt));
     const same = run.last.commit === null || run.last.commit === run.baseCommit;
     if (id && id !== run.baseId) setEnded({ kind: "landed", id });
     else if (fetched && same && !repository?.lastFetchError && !repository?.workflowsTrust?.pending)
