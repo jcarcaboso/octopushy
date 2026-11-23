@@ -167,10 +167,12 @@ async fn respects_concurrency() {
     h.manager.set_concurrency(20);
     assert_eq!(h.manager.concurrency(), 1);
     h.manager
-        .accept(assignment("s1", "test", "sleep", r#"{"ms":200}"#));
+        .accept(assignment("s1", "test", "sleep", r#"{"ms":1000}"#));
+    // Start the first before accepting the second: which of two attempts waiting for one slot
+    // takes it is not fixed, and this test is about the slot, not the order.
+    wait_running(&h.manager, &["s1"]).await;
     h.manager
         .accept(assignment("s2", "test", "sleep", r#"{"ms":10}"#));
-    tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(h.manager.active_ids(), ["s1", "s2"]);
     let mut c = Collector::default();
     let started: Vec<String> = c
@@ -224,7 +226,7 @@ async fn local_runtime_runs_in_parallel_only_when_each_attempt_has_a_user() {
         .accept(assignment("p1", "test", "sleep", r#"{"ms":300}"#));
     h.manager
         .accept(assignment("p2", "test", "sleep", r#"{"ms":300}"#));
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_running(&h.manager, &["p1", "p2"]).await;
     let mut c = Collector::default();
     let started: Vec<String> = c
         .poll(&h.manager)
@@ -249,9 +251,10 @@ async fn cancels_reads_but_never_mutations() {
         .accept(assignment("read", "test", "sleep", r#"{"ms":60000}"#));
     h.manager
         .accept(assignment("mut", "test", "mutate", r#"{"ms":300}"#));
+    wait_running(&h.manager, &["read", "mut"]).await;
+    // Accepted only once both slots are taken, so it cannot start before it is cancelled.
     h.manager
         .accept(assignment("queued", "test", "sleep", r#"{"ms":1}"#));
-    tokio::time::sleep(Duration::from_millis(50)).await;
 
     h.manager.cancel("queued");
     h.manager.cancel("read");
@@ -354,7 +357,8 @@ async fn a_read_stopped_by_a_drain_is_cancelled_even_if_its_tool_cannot_tell() {
     let mut change = assignment("change", "test", "stopped", r#"{"ms":200}"#);
     change.mutating = Some(true);
     h.manager.accept(change);
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    // Draining stops only what is running, so both must have started first.
+    wait_running(&h.manager, &["verify", "change"]).await;
     h.manager.drain();
 
     let mut c = Collector::default();
@@ -623,6 +627,25 @@ async fn forced_mutations_remain_uncertain_even_if_the_executor_returns_success(
         Outcome::Succeeded
     );
     assert!(h.manager.is_idle());
+}
+
+/// Waits until every attempt in `ids` is running at the same time. Creating an attempt's
+/// workspace is disk work on a blocking thread, so a fixed sleep cannot say when it will reach
+/// the limiter; a test that cares must wait for the state it asserts.
+async fn wait_running(manager: &AttemptManager, ids: &[&str]) {
+    for _ in 0..1000 {
+        {
+            let entries = manager.entries.lock().unwrap();
+            if ids
+                .iter()
+                .all(|id| matches!(entries.get(*id).map(|e| e.state), Some(State::Running)))
+            {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("{ids:?} did not all run");
 }
 
 /// Waits until `path` exists.
