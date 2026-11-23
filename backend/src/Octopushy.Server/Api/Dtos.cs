@@ -33,7 +33,14 @@ public sealed record RepositoryDto(
     string? HeadCommit,
     RevisionDto? Revision,
     WorkflowsSourceDto? Workflows = null,
-    WorkflowSourceTrustDto? WorkflowsTrust = null);
+    WorkflowSourceTrustDto? WorkflowsTrust = null,
+    RepositorySyncDto? Sync = null);
+
+/// <summary>
+/// A sync under way, or asked for and about to begin. <c>Phase</c> is one of <see cref="Git.RepositorySyncPhases"/>; the commit,
+/// its subject and author are the fetched head, known from the <c>workflows</c> phase on.
+/// </summary>
+public sealed record RepositorySyncDto(string Phase, DateTimeOffset StartedAt, string? Commit, string? Subject, string? Author);
 
 public sealed record WorkflowSourcePairDto(string Repository, string? CredentialKey, int? CredentialVersion);
 public sealed record WorkflowSourceTrustDto(Guid SourceId, WorkflowSourcePairDto? Confirmed, WorkflowSourcePairDto? Pending,

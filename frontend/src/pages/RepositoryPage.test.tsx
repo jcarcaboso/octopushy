@@ -109,6 +109,71 @@ describe("repository page", () => {
     expect(screen.queryByLabelText("URL")).not.toBeInTheDocument();
   });
 
+  it("locks Sync now from the press and draws the sync as the first row until its revision lands", async () => {
+    const user = userEvent.setup();
+    const fresh = revision({ id: "revision-new", commit: "f".repeat(40), subject: "Raise falcon memory" });
+    let state: "idle" | "syncing" | "done" = "idle";
+    mockApi({
+      "GET /api/repository": () =>
+        state === "idle"
+          ? repository()
+          : state === "syncing"
+            ? { ...repository(), sync: { phase: "validate", startedAt: loadedAt, commit: fresh.commit, subject: fresh.subject, author: "Alice" } }
+            : { ...repository(fresh), lastFetchAt: "2026-10-23T09:00:00Z" },
+      "GET /api/repository/revisions": () => (state === "done" ? [fresh, revision()] : [revision()]),
+      "POST /api/repository/sync": () => {
+        state = "syncing";
+        return undefined;
+      },
+    });
+    renderAt(<RepositoryPage />, { path: "/repository", route: "/repository" });
+
+    await user.click(await screen.findByRole("button", { name: "Sync now" }));
+    expect(screen.getByRole("button", { name: "Syncing…" })).toBeDisabled();
+    expect(await screen.findByText("Raise falcon memory")).toBeVisible();
+    expect(screen.getByRole("status", { name: "Syncing: Validate" })).toBeVisible();
+
+    state = "done";
+    const history = within(screen.getByRole("list", { name: "Revision history" }));
+    expect(await history.findByText("New", {}, { timeout: 3_000 })).toBeVisible();
+    expect(history.getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled();
+  });
+
+  it("says when a sync under way finds nothing new, then that the repository is up to date", async () => {
+    let syncing = true;
+    mockApi({
+      "GET /api/repository": () =>
+        syncing
+          ? { ...repository(), sync: { phase: "apply", startedAt: loadedAt, commit, subject: "Update lab configuration", author: "Alice" } }
+          : { ...repository(), lastFetchAt: "2026-10-23T09:00:00Z" },
+      "GET /api/repository/revisions": () => [revision()],
+    });
+    renderAt(<RepositoryPage />, { path: "/repository", route: "/repository" });
+
+    expect(await screen.findByText("No new commits on main")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Syncing…" })).toBeDisabled();
+    syncing = false;
+    expect(await screen.findByText("Up to date: no new commits on main", {}, { timeout: 3_000 })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled();
+  });
+
+  it("unlocks Sync now without claiming success when the request is refused", async () => {
+    const user = userEvent.setup();
+    mockApi({
+      "GET /api/repository": () => repository(),
+      "GET /api/repository/revisions": () => [revision()],
+      "POST /api/repository/sync": () =>
+        new Response(JSON.stringify({ status: 503, title: "Unavailable" }), { status: 503, headers: { "content-type": "application/problem+json" } }),
+    });
+    renderAt(<RepositoryPage />, { path: "/repository", route: "/repository" });
+
+    await user.click(await screen.findByRole("button", { name: "Sync now" }));
+    expect(await screen.findByText("Unavailable")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled();
+    expect(screen.queryByText(/Up to date/)).not.toBeInTheDocument();
+  });
+
   it("opens the settings when no repository is connected", async () => {
     mockApi({
       "GET /api/repository": () => ({ ...repository(), url: null, lastFetchAt: null, headCommit: null, revision: null }),

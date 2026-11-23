@@ -1692,6 +1692,78 @@
   padding: 0 var(--space-3) var(--space-3) calc(4.75rem + 2 * var(--space-3));
 }
 
+/* A sync under way: the first row of the history, its steps in the change column. */
+.revs__item--sync .revs__row:hover {
+  background: transparent;
+}
+
+.sync-steps {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.625rem;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.sync-steps .track__segment {
+  width: 1.5rem;
+}
+
+.track__segment--now {
+  background: var(--meter-ok);
+  animation: sync-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes sync-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.sync-subject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.sync-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.sync-check .spin {
+  color: var(--link);
+}
+
+.sync-check--done svg {
+  color: var(--success-fg);
+}
+
+/* The revision a sync just loaded: a short wash of the accent, then the plain row. */
+.revs__item--fresh .revs__row {
+  animation: revs-fresh 2.8s ease-out;
+}
+
+@keyframes revs-fresh {
+  from,
+  30% {
+    background: var(--accent-soft);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+.run-chip--new {
+  background: var(--accent-soft);
+  color: var(--link);
+}
+
 .revs__foot,
 .flows__foot {
   display: flex;

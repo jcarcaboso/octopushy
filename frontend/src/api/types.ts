@@ -45,6 +45,7 @@ export type LogChunk = Schemas["LogDto"];
 export type LogLine = Schemas["LogLineRecord"];
 export type ConfirmWorkflowSource = Schemas["ConfirmWorkflowSourceRequest"];
 export type Repository = Schemas["RepositoryDto"];
+export type RepositorySync = Schemas["RepositorySyncDto"];
 export type RepositoryUpdate = Schemas["RepositoryUpdate"];
 export type Revision = Schemas["RevisionDto"];
 export type WorkflowsSource = Schemas["WorkflowsSourceDto"];

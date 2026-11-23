@@ -2301,6 +2301,15 @@ export interface components {
             revision: null | components["schemas"]["RevisionDto"];
             workflows?: null | components["schemas"]["WorkflowsSourceDto"];
             workflowsTrust?: null | components["schemas"]["WorkflowSourceTrustDto"];
+            sync?: null | components["schemas"]["RepositorySyncDto"];
+        };
+        RepositorySyncDto: {
+            phase: string;
+            /** Format: date-time */
+            startedAt: string;
+            commit: null | string;
+            subject: null | string;
+            author: null | string;
         };
         RepositoryUpdate: {
             url: null | string;

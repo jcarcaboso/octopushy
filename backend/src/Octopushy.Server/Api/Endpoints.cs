@@ -54,7 +54,7 @@ public static partial class Endpoints
 
     private static void MapRepository(RouteGroupBuilder group)
     {
-        group.MapGet("", async (OctopushyDb db, Views views, CancellationToken ct) => TypedResults.Ok(await RepositoryAsync(db, views, ct)))
+        group.MapGet("", async (OctopushyDb db, Views views, RepositorySync sync, CancellationToken ct) => TypedResults.Ok(await RepositoryAsync(db, views, ct, sync: sync)))
             .WithName("getRepository");
 
         group.MapPut("", async Task<Results<Ok<RepositoryDto>, ProblemHttpResult>> (
@@ -113,7 +113,7 @@ public static partial class Endpoints
                 }
 
                 sync.Trigger();
-                return TypedResults.Ok(await RepositoryAsync(db, views, ct));
+                return TypedResults.Ok(await RepositoryAsync(db, views, ct, sync: sync));
             }, ct);
         })
         .WithName("updateRepository");
@@ -145,7 +145,7 @@ public static partial class Endpoints
                 settings.WorkflowsLastFetchError = null;
                 await db.SaveChangesAsync(ct);
                 sync.Trigger();
-                return TypedResults.Ok(await RepositoryAsync(db, services.GetRequiredService<Views>(), ct));
+                return TypedResults.Ok(await RepositoryAsync(db, services.GetRequiredService<Views>(), ct, sync: sync));
             }, ct);
         })
         .RequireAuthorization(new AuthorizationPolicyBuilder(CookieAuthenticationDefaults.AuthenticationScheme).RequireAuthenticatedUser().Build())
@@ -994,8 +994,10 @@ public static partial class Endpoints
         .WithName("listVariableVersions");
     }
 
-    private static async Task<RepositoryDto> RepositoryAsync(OctopushyDb db, Views views, CancellationToken ct, bool workflows = true)
+    private static async Task<RepositoryDto> RepositoryAsync(OctopushyDb db, Views views, CancellationToken ct, bool workflows = true, RepositorySync? sync = null)
     {
+        // Read before the revision: a response never pairs a sync that has ended with the revision from before it.
+        var progress = sync?.Progress;
         var settings = await db.RepositorySettings.AsNoTracking().Where(r => r.Id == 1).FirstOrDefaultAsync(ct) ?? new RepositorySettings();
         var credentialSet = await db.StoreEntries.AsNoTracking().AnyAsync(e => e.Key == RepositorySync.CredentialKey, ct);
         return new RepositoryDto(
@@ -1010,6 +1012,9 @@ public static partial class Endpoints
             settings.HeadCommit,
             await views.LatestRevisionAsync(ct),
             workflows ? await views.WorkflowsAsync(settings, ct) : null,
-            views.WorkflowTrust(settings));
+            views.WorkflowTrust(settings),
+            progress is not null
+                ? new RepositorySyncDto(progress.Phase, progress.StartedAt, progress.Commit, progress.Subject, progress.Author)
+                : null);
     }
 }
