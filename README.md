@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.11.1:
+Milestone 1 has shipped, up to release 0.11.2:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,18 @@ Milestone 1 has shipped, up to release 0.11.1:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.11.2:
+
+- **HTTP uptime for machines**, from #209: a guest link with `check: true` gets the same HTTP check and history as a
+  service link. This works for attached appliances such as Home Assistant without SSH access or an agent inside the
+  guest, and for managed guests too. The Inventory and machine page show the checks, and the Overview counts them under
+  Machines. Links stay display-only by default; existing SSH checks are unchanged. Changing a link starts no provision
+  or configure run. See [uptime](docs/uptime.md).
+
+Upgrading from 0.11.1: no database migration, agent contract change or Ansible image change. Deploy the backend and
+frontend before adding `check` to guest links; earlier backends and offline validators reject the field. Existing agents
+that support HTTP uptime checks keep working without an upgrade.
 
 New in 0.11.1:
 
