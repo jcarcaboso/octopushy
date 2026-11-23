@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.11.0:
+Milestone 1 has shipped, up to release 0.11.1:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,26 @@ Milestone 1 has shipped, up to release 0.11.0:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.11.1:
+
+- **Pick what a purge deletes**, from #205: the purge dialog groups unused secrets by node, each secret and each node can
+  be ticked or unticked, **Select all** and **Clear all** act on what the filter shows, and only the ticked secrets are
+  sent. A secret can also be excluded from purge, from the dialog or its Details tab: the flag is saved on the store
+  entry, so no purge deletes it until it is included again, and the purge endpoint keeps an excluded key and says why. It
+  is `POST /api/variables/purge-exclusion`, and `VariableDto` reports `purgeExcluded`.
+- **Attached guests need no hardware or network**, from #204: a `machine: attached` guest runs no machine stage, so it is
+  checked against its workflow's inputs schema without `hardware` and `network` in the top-level `required`; what it does
+  write is still checked. This applies to loading the repository, offline validation and the change form.
+- **A faster agent under load**, from #207: accepting an assignment used to write its workspace and durable marker, and
+  acknowledging a result removed them, inside the connection's select loop, so every attempt's fsyncs queued behind
+  every other's and logs, results and heartbeats waited behind them. Those writes now run on the blocking pool, on the
+  attempt's own task. On the new evals, 64 reads at limit 8 go from 625 ms to 80 ms, and shutdown under load from 185 ms
+  to 28 ms.
+
+Upgrading: one migration, `PurgeExclusion`, which adds a column to the store's entries, runs on start. Stop the old
+backend before starting the new one: only one server may own the database. The agent contract does not change: agents at
+0.11.0 keep working, and updating them to 0.11.1 brings the performance work. No Ansible image change.
 
 New in 0.11.0:
 
