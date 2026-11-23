@@ -10118,6 +10118,53 @@
                 "$ref": "#/components/schemas/WorkflowSourceTrustDto"
               }
             ]
+          },
+          "sync": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RepositorySyncDto"
+              }
+            ]
+          }
+        }
+      },
+      "RepositorySyncDto": {
+        "required": [
+          "phase",
+          "startedAt",
+          "commit",
+          "subject",
+          "author"
+        ],
+        "type": "object",
+        "properties": {
+          "phase": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "commit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "subject": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "author": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

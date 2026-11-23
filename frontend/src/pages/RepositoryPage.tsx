@@ -12,6 +12,8 @@ import { RelativeTime } from "../components/RelativeTime";
 import { EmptyState, ErrorMessage, PageSkeleton, Skeleton } from "../components/States";
 import { WorkflowsSource } from "../components/WorkflowsSource";
 import { plural } from "../lib/format";
+import { SyncRow } from "./repository/sync";
+import { useRepositorySync, type SyncView } from "./repository/useRepositorySync";
 
 type Kind = "none" | "token" | "ssh";
 
@@ -374,7 +376,7 @@ function RevisionIssues({ id }: { id: string }) {
   return <IssueList issues={data.issues} emptyText="This revision has no issues." />;
 }
 
-function History({ latestId, connected }: { latestId: string | null; connected: boolean }) {
+function History({ latestId, connected, branch, sync }: { latestId: string | null; connected: boolean; branch: string; sync: SyncView }) {
   const { data, error, isPending } = useRevisions();
   const [params, setParams] = useSearchParams();
   const [all, setAll] = useState(false);
@@ -382,7 +384,8 @@ function History({ latestId, connected }: { latestId: string | null; connected: 
 
   if (isPending) return <Skeleton height={120} />;
   if (!data) return <ErrorMessage error={error} title="The revision history could not be loaded" />;
-  if (data.length === 0) {
+  const shown = sync.live ?? sync.upToDate;
+  if (data.length === 0 && !shown) {
     return (
       <EmptyState compact title="No revisions loaded yet">
         {connected ? "The first fetch loads one." : "Save a repository URL under Source to load the first revision."}
@@ -405,13 +408,21 @@ function History({ latestId, connected }: { latestId: string | null; connected: 
             <span>Definition</span>
           </div>
           <ul className="revs__list" aria-label="Revision history">
+            {shown ? (
+              <SyncRow
+                sync={shown}
+                done={!sync.live}
+                nothingNew={Boolean(shown.commit) && shown.commit === sync.baseCommit}
+                branch={branch}
+              />
+            ) : null}
             {rows.map((r, index) => {
               const issues = issueSummary(r);
               const open = r.id === selected && issues !== "";
               // The same commit twice means its workflows resolved differently; only then does the digest tell them apart.
               const twin = rows[index - 1]?.commit === r.commit || rows[index + 1]?.commit === r.commit;
               return (
-                <li key={r.id} className="revs__item">
+                <li key={r.id} className={r.id === sync.freshId ? "revs__item revs__item--fresh" : "revs__item"}>
                   <div className="revs__row">
                     <span>
                       <Commit commit={r.commit} />
@@ -427,6 +438,7 @@ function History({ latestId, connected }: { latestId: string | null; connected: 
                         {r.subject ?? <span className="muted">—</span>}
                       </span>
                       {r.id === latestId ? <span className="run-chip run-chip--service">Current</span> : null}
+                      {r.id === sync.freshId ? <span className="run-chip run-chip--new">New</span> : null}
                       {r.isCurrentSource ? null : <span className="run-chip">Previous source</span>}
                     </span>
                     <span className="muted small">{r.author ?? "—"}</span>
@@ -487,6 +499,7 @@ export function RepositoryPage() {
   const { data, error, isPending } = useRepository({ fast: watching });
   const sync = useSyncRepository();
   const [params] = useSearchParams();
+  const progress = useRepositorySync(data);
 
   useEffect(() => {
     if (!watching) return;
@@ -508,11 +521,14 @@ export function RepositoryPage() {
           <button
             type="button"
             className="button"
-            disabled={!data.url || sync.isPending}
-            onClick={() => sync.mutate(undefined, { onSuccess: () => setWatching(true) })}
+            disabled={!data.url || sync.isPending || progress.live !== null}
+            onClick={() => {
+              progress.request();
+              sync.mutate(undefined, { onError: progress.cancel });
+            }}
           >
-            <RefreshCw size={15} aria-hidden="true" className={watching ? "spin" : undefined} />
-            Sync now
+            <RefreshCw size={15} aria-hidden="true" className={progress.live ? "spin" : undefined} />
+            {progress.live ? "Syncing…" : "Sync now"}
           </button>
         }
       />
@@ -539,7 +555,7 @@ export function RepositoryPage() {
             {tab === "workflows" && workflows ? (
               <WorkflowsSource workflows={workflows} />
             ) : (
-              <History latestId={data.revision?.id ?? null} connected={Boolean(data.url)} />
+              <History latestId={data.revision?.id ?? null} connected={Boolean(data.url)} branch={data.branch} sync={progress} />
             )}
           </div>
           <aside className="repo-side" aria-label="Repository settings">

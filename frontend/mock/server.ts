@@ -441,7 +441,32 @@ on("PUT", "/api/repository", ({ body }) => Object.assign(data.repository, {
   url: body.url ?? data.repository.url, branch: body.branch ?? data.repository.branch, pollSeconds: body.pollSeconds ?? data.repository.pollSeconds,
   credentialKind: body.credentialKind ?? data.repository.credentialKind, credentialUsername: body.credentialUsername ?? null,
 }) satisfies Repository);
-on("POST", "/api/repository/sync", () => new Reply(202));
+// A sync walks its phases over a few seconds. Every other one finds a new commit; the rest find nothing new.
+let syncs = 0;
+on("POST", "/api/repository/sync", () => {
+  if (data.repository.sync) return new Reply(202);
+  const found = syncs++ % 2 === 0;
+  const startedAt = new Date().toISOString();
+  const head = found
+    ? { commit: hex(`sync-${syncs}`, 40), subject: "falcon: raise memory to 8 GiB", author: "ops" }
+    : { commit: data.repository.revision!.commit, subject: data.repository.revision!.subject, author: data.repository.revision!.author };
+  const step = (phase: string, known: boolean) => (data.repository.sync = { phase, startedAt, ...(known ? head : { commit: null, subject: null, author: null }) });
+  step("fetch", false);
+  setTimeout(() => step("workflows", true), 1_500);
+  setTimeout(() => step("validate", true), 2_700);
+  setTimeout(() => step("apply", true), 4_200);
+  setTimeout(() => {
+    if (found) {
+      const at = new Date().toISOString();
+      data.revisions.unshift({ ...data.revisions[0], id: `revision-sync-${syncs}`, ...head, committedAt: at, loadedAt: at, valid: true, errorCount: 0, warningCount: 0 });
+      data.repository.revision = data.revisions[0];
+      data.repository.headCommit = head.commit;
+    }
+    data.repository.lastFetchAt = new Date().toISOString();
+    data.repository.sync = null;
+  }, 5_000);
+  return new Reply(202);
+});
 on("GET", "/api/repository/revisions", ({ query }) => data.revisions.slice(0, Number(query.get("limit") ?? 50)));
 on("GET", "/api/repository/revisions/{id}", ({ params }) => data.revisionDetail(params.id) ?? notFound("revision"));
 

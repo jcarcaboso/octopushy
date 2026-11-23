@@ -34,9 +34,20 @@ public sealed class RepositorySync(
     // One sync at a time: two that overlap could record an older head after a newer one.
     private readonly SemaphoreSlim _running = new(1, 1);
 
+    private SyncProgress? _progress;
+
+    // Whether the loop that answers Trigger runs. Without it a requested sync never begins and must not look begun.
+    private volatile bool _looping;
+
+    /// <summary>What the sync under way, or the one just asked for, is doing; null when none is. Shown, never stored.</summary>
+    public SyncProgress? Progress => Volatile.Read(ref _progress);
+
     /// <summary>Asks for a fetch now instead of at the next poll.</summary>
     public void Trigger()
     {
+        // Asked for and not begun yet: the page locks Sync now from the request on. A sync under way keeps its own step.
+        if (_looping)
+            Interlocked.CompareExchange(ref _progress, new SyncProgress(RepositorySyncPhases.Fetch, clock.GetUtcNow()), null);
         if (_trigger.CurrentCount == 0)
         {
             try
@@ -68,6 +79,7 @@ public sealed class RepositorySync(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _looping = true;
         // At startup, before the first fetch: builds that the revision already applied needs, which a failed fetch would delay.
         try
         {
@@ -112,6 +124,25 @@ public sealed class RepositorySync(
     /// <summary>Fetches once and loads the head revision if it is new; returns the poll interval.</summary>
     public async Task<TimeSpan> SyncOnceAsync(CancellationToken cancellationToken)
     {
+        try
+        {
+            return await SyncCoreAsync(cancellationToken);
+        }
+        finally
+        {
+            Volatile.Write(ref _progress, null);
+        }
+    }
+
+    private void Step(string phase, CommitInfo? commit = null)
+    {
+        var current = Volatile.Read(ref _progress);
+        Volatile.Write(ref _progress, new SyncProgress(phase, current?.StartedAt ?? clock.GetUtcNow(),
+            commit?.Commit ?? current?.Commit, commit?.Subject ?? current?.Subject, commit?.Author ?? current?.Author));
+    }
+
+    private async Task<TimeSpan> SyncCoreAsync(CancellationToken cancellationToken)
+    {
         // Fetch and parse outside the controller gate. Only the captured source may persist
         // their result: a settings change during either phase discards the stale discovery.
         var settings = await engine.ExecuteAsync(async (db, _) =>
@@ -128,6 +159,7 @@ public sealed class RepositorySync(
 
         try
         {
+            Step(RepositorySyncPhases.Fetch);
             await using var scope = scopes.CreateAsyncScope();
             var store = scope.ServiceProvider.GetRequiredService<VariableStore>();
             var credential = await CredentialAsync(store, settings, cancellationToken);
@@ -142,6 +174,7 @@ public sealed class RepositorySync(
                 await ChangeReconciler.ReconcileAsync(engine, mirror, settings.Branch, watched, head, clock, cancellationToken);
             }
             var info = await mirror.CommitInfoAsync(head, cancellationToken);
+            Step(RepositorySyncPhases.Workflows, info);
             var workflows = WorkflowsSetting.Read(await mirror.SnapshotAsync(head, cancellationToken));
             var confirmed = WorkflowSourceTrust.Confirmed(settings);
             var trusted = !workflows.External || workflows == confirmed;
@@ -177,8 +210,10 @@ public sealed class RepositorySync(
                 await FetchWorkflowsAsync(store, settings, workflowsUrl, confirmed.Credential, cancellationToken);
             }
             if (!trusted) return poll;
+            Step(RepositorySyncPhases.Validate);
             var resolved = await revisions.ResolveAsync(head, ReleasesAsync, cancellationToken);
             var repository = resolved.Repository;
+            Step(RepositorySyncPhases.Apply);
             await engine.ExecuteAsync(async (db, services) =>
             {
                 // The head moving to a revision, and that revision's inventory (desired inputs and proposed runs), are one
@@ -415,4 +450,20 @@ public sealed class RepositorySync(
     private static bool SameHost(string first, string second) =>
         Uri.TryCreate(first, UriKind.Absolute, out var a) && Uri.TryCreate(second, UriKind.Absolute, out var b)
         && a.Scheme == b.Scheme && a.Port == b.Port && string.Equals(a.IdnHost, b.IdnHost, StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>Where a sync stands, and once fetched, the head commit it read. See <see cref="RepositorySync.Progress"/>.</summary>
+public sealed record SyncProgress(string Phase, DateTimeOffset StartedAt, string? Commit = null, string? Subject = null, string? Author = null);
+
+/// <summary>The steps of one sync, in order. Derived, never stored.</summary>
+public static class RepositorySyncPhases
+{
+    /// <summary>Fetching the lab repository's branch, or asked for and about to.</summary>
+    public const string Fetch = "fetch";
+    /// <summary>Fetching the workflows repository's releases, when <c>octopushy.yaml</c> names one.</summary>
+    public const string Workflows = "workflows";
+    /// <summary>Resolving workflow references and validating the definitions at the head.</summary>
+    public const string Validate = "validate";
+    /// <summary>Recording the revision and updating the inventory from it.</summary>
+    public const string Apply = "apply";
 }

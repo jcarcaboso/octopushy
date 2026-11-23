@@ -274,7 +274,8 @@ export function useRepository(options: { fast?: boolean } = {}) {
   return useQuery({
     queryKey: keys.repository,
     queryFn: () => unwrap(api.GET("/api/repository")),
-    refetchInterval: options.fast ? 3_000 : 30_000,
+    // A sync under way moves through its phases in seconds.
+    refetchInterval: (query) => (query.state.data?.sync ? 1_000 : options.fast ? 3_000 : 30_000),
   });
 }
 
@@ -769,15 +770,8 @@ export function useSyncRepository() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: () => unwrap(api.POST("/api/repository/sync", { parseAs: "text" })),
-    onSuccess: () => {
-      // The fetch runs in the background; look again shortly.
-      for (const delay of [1_000, 3_000, 6_000]) {
-        setTimeout(() => {
-          void client.invalidateQueries({ queryKey: keys.repository });
-          void client.invalidateQueries({ queryKey: keys.revisions });
-        }, delay);
-      }
-    },
+    // The sync runs in the background and the repository says how far it is; the page reloads the history when it ends.
+    onSuccess: () => client.invalidateQueries({ queryKey: keys.repository }),
   });
 }
 
