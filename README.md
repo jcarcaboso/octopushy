@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.11.2:
+Milestone 1 has shipped, up to release 0.11.3:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,21 @@ Milestone 1 has shipped, up to release 0.11.2:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.11.3:
+
+- **Host keys stored as plain, and a secret made plain**, from #214: **Set** on a referenced key that a definition names
+  as a host key (`access.hostKey`, `snippets.hosts.<host>.hostKey`) now starts as Plain, since runs refuse a host key
+  stored as a secret. A secret that should have been plain can be fixed with **Make plain**, on the entry's warning or in
+  its Details. You enter the value again, every secret version is deleted, and the value becomes the next version,
+  plain. The key stays, and a run blocked on it continues. It is refused while a definition, run or attempt still holds
+  one of the secret's versions. See [making a secret plain](docs/credential-lifecycle.md#making-a-secret-plain).
+- **Live repository sync**, from #212: Sync now stays locked until the sync ends, and the sync shows as the first row of
+  the Repository history with its phase (fetch, workflows, validate, apply) and the fetched commit. A sync that finds
+  nothing new ends as "Up to date".
+
+Upgrading from 0.11.2: no database migration, agent contract change or Ansible image change. Agents at 0.11.2 keep
+working.
 
 New in 0.11.2:
 
