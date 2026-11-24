@@ -26,6 +26,7 @@ function entry(overrides: Partial<Variable> = {}): Variable {
     lines: 1,
     newerVersion: latestVersion > version ? latestVersion : null,
     purgeExcluded: false,
+    mustBePlain: false,
     ...overrides,
   };
 }
@@ -89,6 +90,78 @@ describe("VariablesPage entry pane", () => {
     expect(within(selected).getByText("proxmox/site-a/")).toBeInTheDocument();
     expect(within(selected).getByText("v3 active")).toBeInTheDocument();
     expect(within(selected).getByText("Newer v4")).toBeInTheDocument();
+  });
+
+  it("replaces a host key stored as a secret with a plain value, against the version it showed", async () => {
+    const user = userEvent.setup();
+    let plain = false;
+    const { requests } = mockApi({
+      "GET /api/variables": () =>
+        store(plain ? entry({ visibility: "plain", value: "ssh-ed25519 AAAA", version: 5, latestVersion: 5 }) : entry({ mustBePlain: true })),
+      "POST /api/variables/make-plain": () => {
+        plain = true;
+      },
+    });
+    renderPage(opened(key));
+    const selected = await pane();
+    expect(within(selected).getByText("A host key stored as a secret")).toBeInTheDocument();
+    expect(selected).toHaveTextContent("Runs refuse a host key stored as a secret");
+    await user.click(within(selected).getByRole("button", { name: "Make plain" }));
+
+    const dialog = screen.getByRole("dialog", { name: `Make ${key} plain?` });
+    expect(dialog).toHaveTextContent("Every version of it is deleted");
+    expect(dialog).toHaveTextContent("saved as the next version");
+    const confirm = within(dialog).getByRole("button", { name: "Make plain" });
+    expect(confirm).toBeDisabled();
+    await user.type(within(dialog).getByLabelText("Plain value"), "ssh-ed25519 AAAA");
+    await user.type(within(dialog).getByLabelText("Note, optional"), "Host keys are public");
+    await user.click(confirm);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(requests.find((r) => r.path.endsWith("/make-plain"))?.body).toEqual({
+      key,
+      value: "ssh-ed25519 AAAA",
+      expectedCurrentVersion: 3,
+      note: "Host keys are public",
+    });
+    expect(await within(selected).findByText("Plain")).toBeInTheDocument();
+    expect(within(selected).queryByText("A host key stored as a secret")).not.toBeInTheDocument();
+  });
+
+  it("keeps the version the Make plain dialog opened at when another one becomes active meanwhile", async () => {
+    const user = userEvent.setup();
+    let activated = false;
+    const { requests } = mockApi({
+      "GET /api/variables": () => store(entry(activated ? { version: 4, latestVersion: 4 } : {})),
+      "POST /api/variables/make-plain": () => {
+        activated = true;
+        return problem(409, "The active version changed. Refresh and review before saving.");
+      },
+    });
+    renderPage(opened(key));
+    const selected = await pane();
+    await user.click(within(selected).getByRole("button", { name: "Details" }));
+    await user.click(within(selected).getByRole("button", { name: "Make plain" }));
+    const dialog = screen.getByRole("dialog", { name: `Make ${key} plain?` });
+    await user.type(within(dialog).getByLabelText("Plain value"), "public");
+    await user.click(within(dialog).getByRole("button", { name: "Make plain" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("The active version changed");
+    await waitFor(() => expect(within(selected).getByText("v4 active")).toBeInTheDocument());
+
+    await user.click(within(dialog).getByRole("button", { name: "Make plain" }));
+    await waitFor(() => expect(requests.filter((r) => r.path.endsWith("/make-plain"))).toHaveLength(2));
+    expect(requests.filter((r) => r.path.endsWith("/make-plain")).map((r) => (r.body as { expectedCurrentVersion: number }).expectedCurrentVersion)).toEqual([3, 3]);
+  });
+
+  it("offers Make plain for any secret from its details", async () => {
+    const user = userEvent.setup();
+    mockApi({ "GET /api/variables": () => store() });
+    renderPage(opened(key));
+    const selected = await pane();
+    expect(within(selected).queryByText("A host key stored as a secret")).not.toBeInTheDocument();
+    await user.click(within(selected).getByRole("button", { name: "Details" }));
+    await user.click(within(selected).getByRole("button", { name: "Make plain" }));
+    expect(screen.getByRole("dialog", { name: `Make ${key} plain?` })).toBeInTheDocument();
   });
 
   it("does not call a revoked version after the active one newer, in the list or the entry", async () => {
@@ -578,7 +651,7 @@ describe("VariablesPage versions", () => {
 describe("VariablesPage new entry", () => {
   const store = () => ({
     entries: [entry(), entry({ key: "proxmox/site-a/ca", visibility: "plain", value: "cert", version: 1, latestVersion: 1 })],
-    missing: [{ key: "dns/technitium/admin-password", usedBy: ["guest/krb-dns-01"] }],
+    missing: [{ key: "dns/technitium/admin-password", usedBy: ["guest/krb-dns-01"], mustBePlain: false }],
     system: [],
   });
 
@@ -834,7 +907,7 @@ describe("VariablesPage folders", () => {
       "GET /api/variables": () => ({
         ...store(),
         entries: [...store().entries, entry({ key: "system/git/credential" })],
-        missing: [{ key: "system/git/other", usedBy: [] }],
+        missing: [{ key: "system/git/other", usedBy: [], mustBePlain: false }],
         system: [{ key: "system/git/credential", visibility: "secret", updatedAt: createdAt }],
       }),
     });
@@ -858,6 +931,51 @@ describe("VariablesPage folders", () => {
     renderPage("/variables?folder=proxmox/site-a/gone/deeper");
     expect(within(await list()).getByRole("link", { name: /api-token/ })).toHaveAttribute("title", siteAToken);
     expect(within(screen.getByRole("navigation", { name: "Folder" })).getByText("site-a")).toHaveAttribute("aria-current", "page");
+  });
+
+  it("starts a key a definition names as a host key as plain, and saves it plain", async () => {
+    const user = userEvent.setup();
+    const hostKey = "proxmox/ziost/ssh-host-key";
+    const { requests } = mockApi({
+      "GET /api/variables": () => ({ ...store(), missing: [{ key: hostKey, usedBy: ["home/ziost"], mustBePlain: true }] }),
+      "PUT /api/variables": () => undefined,
+    });
+    renderPage();
+    const strip = await screen.findByRole("region", { name: "Referenced keys that are not set" });
+    await user.click(within(strip).getByRole("button", { name: `Set ${hostKey}` }));
+    const form = await screen.findByRole("region", { name: "New entry" });
+    expect(within(form).getByRole("button", { name: "Plain" })).toHaveAttribute("aria-pressed", "true");
+    expect(form).toHaveTextContent("A definition names this key as a host key, which is public.");
+    await user.type(within(form).getByLabelText("Value"), "ssh-ed25519 AAAA root@ziost");
+    await user.click(within(form).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(requests.find((r) => r.method === "PUT")?.body).toMatchObject({ key: hostKey, visibility: "plain" }));
+  });
+
+  it("starts secret again once the host key's name is replaced with another key", async () => {
+    const user = userEvent.setup();
+    const hostKey = "proxmox/ziost/ssh-host-key";
+    mockApi({ "GET /api/variables": () => ({ ...store(), missing: [{ key: hostKey, usedBy: ["home/ziost"], mustBePlain: true }] }) });
+    renderPage();
+    const strip = await screen.findByRole("region", { name: "Referenced keys that are not set" });
+    await user.click(within(strip).getByRole("button", { name: `Set ${hostKey}` }));
+    const form = await screen.findByRole("region", { name: "New entry" });
+    const field = within(form).getByLabelText("Key");
+    await user.clear(field);
+    await user.type(field, "proxmox/ziost/api-token");
+    expect(within(form).getByRole("button", { name: "Secret" })).toHaveAttribute("aria-pressed", "true");
+    expect(form).not.toHaveTextContent("host key");
+  });
+
+  it("warns when a host key is set as a secret from a key a definition names as one", async () => {
+    const user = userEvent.setup();
+    const hostKey = "proxmox/ziost/ssh-host-key";
+    mockApi({ "GET /api/variables": () => ({ ...store(), missing: [{ key: hostKey, usedBy: ["home/ziost"], mustBePlain: true }] }) });
+    renderPage();
+    const strip = await screen.findByRole("region", { name: "Referenced keys that are not set" });
+    await user.click(within(strip).getByRole("button", { name: `Set ${hostKey}` }));
+    const form = await screen.findByRole("region", { name: "New entry" });
+    await user.click(within(form).getByRole("button", { name: "Secret" }));
+    expect(form).toHaveTextContent("runs refuse a host key stored as a secret");
   });
 
   it("deletes a key that nothing uses and closes it", async () => {

@@ -675,7 +675,7 @@ const entry = (key: string, visibility: "secret" | "plain", usedBy: string[], ve
     const n = version - i;
     return stored(n, n === version ? own : `${own}-v${n}`, n === version ? "active" : "previous", 1000 * (i + 1), n > 1 && n === version ? "Rotated after the token audit." : null);
   }));
-  const created: Variable = { key, visibility, description, version, updatedAt: ago(1000), value: null, usedBy, latestVersion: version, revoked: false, lines: null, newerVersion: null, purgeExcluded: false };
+  const created: Variable = { key, visibility, description, version, updatedAt: ago(1000), value: null, usedBy, latestVersion: version, revoked: false, lines: null, newerVersion: null, purgeExcluded: false, mustBePlain: false };
   summarizeVariable(created);
   return created;
 };
@@ -684,7 +684,7 @@ const entry = (key: string, visibility: "secret" | "plain", usedBy: string[], ve
 const withHistory = (key: string, visibility: "secret" | "plain", usedBy: string[], description: string, versions: StoredVersion[]): Variable => {
   variableHistory.set(key, versions);
   variableActive.set(key, versions.find((v) => v.status === "active")?.version ?? 0);
-  const created: Variable = { key, visibility, description, version: 0, updatedAt: ago(0), value: null, usedBy, latestVersion: 0, revoked: false, lines: null, newerVersion: null, purgeExcluded: false };
+  const created: Variable = { key, visibility, description, version: 0, updatedAt: ago(0), value: null, usedBy, latestVersion: 0, revoked: false, lines: null, newerVersion: null, purgeExcluded: false, mustBePlain: false };
   summarizeVariable(created);
   return created;
 };
@@ -723,8 +723,9 @@ export const variables: Variables = {
     entry("shared/acme_email", "plain", ["mrb-crt-01/traefik"], 1, "ops@example.org"),
   ],
   missing: [
-    { key: "proxmox/pve01/bb/machine_tools_token", usedBy: ["home/pve01/bb"] },
-    { key: "proxmox/moraband/apps-mrb-01/plane/s3_secret", usedBy: ["apps-mrb-01/plane"] },
+    { key: "proxmox/pve01/bb/machine_tools_token", usedBy: ["home/pve01/bb"], mustBePlain: false },
+    { key: "proxmox/moraband/apps-mrb-01/plane/s3_secret", usedBy: ["apps-mrb-01/plane"], mustBePlain: false },
+    { key: "proxmox/moraband/ssh-host-key", usedBy: ["home/moraband"], mustBePlain: true },
   ],
   system: [
     { key: "system/agent-ca/certificate", visibility: "plain", updatedAt: ago(90000) },

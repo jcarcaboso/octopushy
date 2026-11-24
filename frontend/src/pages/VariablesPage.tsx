@@ -2,7 +2,7 @@ import { ChevronRight, Eye, EyeOff, FolderTree as FolderTreeIcon, KeyRound, List
 import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { useRevealVariables, useVariables } from "../api/queries";
-import type { Variable } from "../api/types";
+import type { MissingVariable, Variable } from "../api/types";
 import { Callout } from "../components/Callout";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PageHeader } from "../components/PageHeader";
@@ -12,7 +12,7 @@ import { EntryPane } from "./variables/EntryPane";
 import { FolderTree } from "./variables/FolderTree";
 import { GuardLink } from "./variables/GuardLink";
 import { LeaveContext } from "./variables/leave";
-import { NewEntryForm } from "./variables/NewEntryForm";
+import { NewEntryForm, type Visibility } from "./variables/NewEntryForm";
 import { OptionsMenu } from "./variables/OptionsMenu";
 import { entryHref, folderHref, folderTree, foldersOn, lastSegment, listFolder, matchesSearch, parentFolder } from "./variables/folders";
 
@@ -20,7 +20,7 @@ type View = "folders" | "all";
 /** A revealed value with the version it belongs to, so a value replaced since is concealed again. */
 type Revealed = Record<string, { version: number; value: string | null }>;
 /** A new entry being set, valid while the address stays where it was opened. */
-type Creating = { initialKey: string; folder: string | null };
+type Creating = { initialKey: string; visibility: Visibility; folder: string | null };
 
 const viewStorageKey = "octopushy.variables.view";
 
@@ -55,7 +55,7 @@ function FolderPath({ path }: { path: string }) {
   );
 }
 
-function Missing({ missing, onSet }: { missing: { key: string; usedBy: string[] }[]; onSet: (key: string) => void }) {
+function Missing({ missing, onSet }: { missing: MissingVariable[]; onSet: (key: string, visibility: Visibility) => void }) {
   const [open, setOpen] = useState(missing.length <= 3);
   return (
     <section className="vars-missing" aria-label="Referenced keys that are not set">
@@ -70,7 +70,7 @@ function Missing({ missing, onSet }: { missing: { key: string; usedBy: string[] 
             <li key={m.key}>
               <code className="vars-missing__key">{m.key}</code>
               <span className="vars-missing__used">{m.usedBy.length ? `Used by ${m.usedBy.join(", ")}` : "Not referenced"}</span>
-              <button type="button" className="button button--small" onClick={() => onSet(m.key)} aria-label={`Set ${m.key}`}>
+              <button type="button" className="button button--small" onClick={() => onSet(m.key, m.mustBePlain ? "plain" : "secret")} aria-label={`Set ${m.key}`}>
                 Set
               </button>
             </li>
@@ -242,12 +242,12 @@ export function VariablesPage() {
     });
   }
 
-  function startNew(initialKey: string) {
+  function startNew(initialKey: string, visibility: Visibility = "secret") {
     leave(() => {
       setDrawer(false);
       setFull(false);
       // The key leaves the address first, so the form is valid at the address it opens at.
-      setCreating({ initialKey, folder: folderParam });
+      setCreating({ initialKey, visibility, folder: folderParam });
       setKey(null);
     });
   }
@@ -380,6 +380,7 @@ export function VariablesPage() {
       return (
         <NewEntryForm
           initialKey={newEntry.initialKey}
+          initialVisibility={newEntry.visibility}
           backLabel={backLabel}
           existingKeys={keys}
           onOpen={(key) =>

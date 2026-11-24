@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
@@ -265,6 +266,81 @@ public class ManagedHostKeyTests(PostgresFixture postgres) : IClassFixture<Postg
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Blocked, run.Status);
         Assert.Contains($"{NodeKeyStore}: a host key is public; store it as plain", run.Detail);
+    }
+
+    [Fact]
+    public async Task A_hosts_pin_that_is_not_set_is_listed_as_one_to_set_plain()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        using var http = server.CreateClient();
+        var code = (await File.ReadAllTextAsync(Path.Combine(server.DataDirectory, "setup-code"))).Trim();
+        (await http.PostAsJsonAsync("/api/auth/setup", new { setupCode = code, username = "ops", password = "a long password" })).EnsureSuccessStatusCode();
+        await server.SyncAndTrustAsync(http);
+
+        var missing = (await http.GetFromJsonAsync<JsonObject>("/api/variables"))!["missing"]!.AsArray();
+        Assert.True(missing.Single(m => m!["key"]!.GetValue<string>() == NodeKeyStore)!["mustBePlain"]!.GetValue<bool>());
+        Assert.False(missing.Single(m => m!["key"]!.GetValue<string>() == "app/tailscale")!["mustBePlain"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task A_hosts_pin_set_as_a_secret_is_made_plain_and_the_blocked_run_continues()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        var (agent, http, _) = await ReadyAsync(server, pinIsSecret: true);
+        using var _ = http;
+        await server.TickAsync();
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.Equal(RunStatuses.Blocked, run.Status);
+
+        // The list says which keys a definition names as a host key.
+        var entries = (await http.GetFromJsonAsync<JsonObject>("/api/variables"))!["entries"]!.AsArray();
+        bool MustBePlain(string key) => entries.Single(e => e!["key"]!.GetValue<string>() == key)!["mustBePlain"]!.GetValue<bool>();
+        Assert.True(MustBePlain(NodeKeyStore));
+        Assert.False(MustBePlain("access/app/ssh-key"));
+
+        // Stale, or for a plain entry, nothing changes.
+        Assert.Equal(HttpStatusCode.Conflict,
+            (await http.PostAsJsonAsync("/api/variables/make-plain", new { key = NodeKeyStore, value = NodeKey, expectedCurrentVersion = 2 })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await http.PostAsJsonAsync("/api/variables/make-plain", new { key = "access/app/host-key", value = NodeKey, expectedCurrentVersion = 1 })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await http.PostAsJsonAsync("/api/variables/make-plain", new { key = NodeKeyStore, value = "", expectedCurrentVersion = 1 })).StatusCode);
+        Assert.Equal(Visibilities.Secret, await server.QueryAsync(db => db.StoreEntries.Where(e => e.Key == NodeKeyStore).Select(e => e.Visibility).SingleAsync()));
+
+        // The blocked run binds the key but pinned no version of it, so it holds none of the secret's versions.
+        var response = await http.PostAsJsonAsync("/api/variables/make-plain", new { key = NodeKeyStore, value = NodeKey, expectedCurrentVersion = 1, note = "Host keys are public" });
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        var entry = await server.QueryAsync(db => db.StoreEntries.AsNoTracking().SingleAsync(e => e.Key == NodeKeyStore));
+        Assert.Equal((Visibilities.Plain, 2, 2), (entry.Visibility, entry.CurrentVersion, entry.LatestVersion));
+        var version = Assert.Single(await server.QueryAsync(db => db.StoreVersions.AsNoTracking().Where(v => v.Key == NodeKeyStore).ToListAsync()));
+        Assert.Equal((2, "ops", "Host keys are public"), (version.Version, version.ActivatedBy, version.ActivationNote));
+        var listed = (await http.GetFromJsonAsync<JsonObject>("/api/variables"))!["entries"]!.AsArray().Single(e => e!["key"]!.GetValue<string>() == NodeKeyStore)!;
+        Assert.Equal(NodeKey, listed["value"]!.GetValue<string>());
+
+        await server.TickAsync();
+        Assert.NotEqual(RunStatuses.Blocked, (await server.LatestRunAsync(Guest, Operations.Provision)).Status);
+        Assert.Contains(agent.TakeAssignments(), a => a.Executor == "opentofu");
+    }
+
+    [Fact]
+    public async Task Making_a_secret_plain_is_refused_while_a_run_that_has_not_finished_pinned_one_of_its_versions()
+    {
+        await using var server = await ServerHarness.StartAsync(postgres, Managed());
+        var (agent, http, _) = await ReadyAsync(server);
+        using var _ = http;
+        // The provision run pins its privileged token, a secret, before its plan is dispatched.
+        await agent.NextAsync("preview");
+        var run = await server.LatestRunAsync(Guest, Operations.Provision);
+        Assert.True(RunContext.Parse(run.Context).SecretBindingsPinned);
+        const string key = "proxmox/korriban/privileged-token";
+        Assert.Contains(key, RunContext.Parse(run.Context).Secrets.Values);
+        var current = await server.QueryAsync(db => db.StoreEntries.Where(e => e.Key == key).Select(e => e.CurrentVersion).SingleAsync());
+
+        var refused = await http.PostAsJsonAsync("/api/variables/make-plain", new { key, value = "public now", expectedCurrentVersion = current });
+        Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        Assert.Contains($"run #{run.Number}", (await refused.Content.ReadFromJsonAsync<JsonObject>())!["title"]!.GetValue<string>());
+        Assert.Equal(Visibilities.Secret, await server.QueryAsync(db => db.StoreEntries.Where(e => e.Key == key).Select(e => e.Visibility).SingleAsync()));
+        Assert.True(await server.QueryAsync(db => db.StoreVersions.AnyAsync(v => v.Key == key && v.Version == current)));
     }
 
     [Fact]

@@ -51,6 +51,12 @@ public static class VariableUses
         return result;
     }
 
+    /// <summary>The keys a definition of the head revision names as a host key: public values, which runs take only from a plain entry.</summary>
+    public static async Task<HashSet<string>> PlainKeysAsync(OctopushyDb db, RevisionCache revisions, CancellationToken ct) =>
+        await HeadRevisionAsync(db, ct) is { } revision
+            ? (await revisions.GetAsync(revision, ct)).StoreUses.Where(u => u.Plain).Select(u => u.Key).ToHashSet(StringComparer.Ordinal)
+            : [];
+
     /// <summary>The revision the branch head is, as the last sync loaded it; never merely the newest one recorded.</summary>
     public static Task<DefinitionRevision?> HeadRevisionAsync(OctopushyDb db, CancellationToken ct) =>
         RepositoryTrust.HeadRevisions(db).AsNoTracking().FirstOrDefaultAsync(ct);

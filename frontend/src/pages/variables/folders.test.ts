@@ -16,6 +16,7 @@ function entry(key: string, overrides: Partial<Variable> = {}): Variable {
     lines: 1,
     newerVersion: null,
     purgeExcluded: false,
+    mustBePlain: false,
     ...overrides,
   };
 }

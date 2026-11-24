@@ -1173,6 +1173,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/variables/make-plain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["makeVariablePlain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/variables/purge": {
         parameters: {
             query?: never;
@@ -2074,6 +2090,7 @@ export interface components {
         MissingVariableDto: {
             key: string;
             usedBy: string[];
+            mustBePlain: boolean;
         };
         NextVmidDto: {
             installation: string;
@@ -2696,6 +2713,14 @@ export interface components {
             /** Format: int32 */
             newerVersion: null | number;
             purgeExcluded: boolean;
+            mustBePlain: boolean;
+        };
+        VariableMakePlain: {
+            key: string;
+            value: string;
+            /** Format: int32 */
+            expectedCurrentVersion: number;
+            note?: null | string;
         };
         VariablePromotionRequest: {
             key: string;
@@ -7152,6 +7177,55 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    makeVariablePlain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VariableMakePlain"];
+            };
+        };
         responses: {
             /** @description No Content */
             204: {
