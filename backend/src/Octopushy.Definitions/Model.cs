@@ -396,5 +396,8 @@ public sealed record TemplateDefinition(
     public string Address => $"templates/{Id}";
 }
 
-/// <summary>A store key, optional exact version, and the resource whose definition uses it.</summary>
-public sealed record StoreUse(string Key, string Consumer, string File, int? Version = null);
+/// <summary>
+/// A store key, optional exact version, and the resource whose definition uses it. <c>Plain</c> when the definition names a
+/// public value there, a host key, which runs refuse to take from a secret.
+/// </summary>
+public sealed record StoreUse(string Key, string Consumer, string File, int? Version = null, bool Plain = false);

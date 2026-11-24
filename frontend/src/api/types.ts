@@ -68,6 +68,7 @@ export type Variables = Schemas["VariablesDto"];
 export type Variable = Schemas["VariableDto"];
 export type MissingVariable = Schemas["MissingVariableDto"];
 export type VariableUpdate = Schemas["VariableUpdate"];
+export type VariableMakePlain = Schemas["VariableMakePlain"];
 export type VariableCandidate = Schemas["VariableCandidateRequest"];
 export type VariablePromotion = Schemas["VariablePromotionRequest"];
 export type VariableRevocation = Schemas["VariableRevocationRequest"];

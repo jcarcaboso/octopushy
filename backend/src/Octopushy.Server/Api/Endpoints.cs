@@ -677,6 +677,7 @@ public static partial class Endpoints
         group.MapGet("", async (VariableStore store, OctopushyDb db, RevisionCache revisions, CancellationToken ct) =>
         {
             var uses = await VariableUses.ByKeyAsync(db, revisions, ct);
+            var plain = await VariableUses.PlainKeysAsync(db, revisions, ct);
             var entries = await store.ListAsync(ct);
             // A revoked version after the active one is no newer value to make active: only one that may still be used counts.
             var newer = await (from version in db.StoreVersions.AsNoTracking()
@@ -703,11 +704,12 @@ public static partial class Endpoints
                     // A secret is opened here only to count its lines; its value stays on the server.
                     entry.Visibility == Visibilities.Plain ? VariableStore.Lines(value) : await store.ActiveLinesAsync(entry.Key, ct),
                     newer.TryGetValue(entry.Key, out var newerVersion) ? newerVersion : null,
-                    entry.PurgeExcluded));
+                    entry.PurgeExcluded,
+                    plain.Contains(entry.Key)));
             }
 
             var known = entries.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
-            var missing = uses.Where(u => !known.Contains(u.Key)).OrderBy(u => u.Key).Select(u => new MissingVariableDto(u.Key, u.Value)).ToList();
+            var missing = uses.Where(u => !known.Contains(u.Key)).OrderBy(u => u.Key).Select(u => new MissingVariableDto(u.Key, u.Value, plain.Contains(u.Key))).ToList();
             var system = entries.Where(e => e.Key.StartsWith(VariableStore.SystemScope, StringComparison.Ordinal))
                 .Select(e => new SystemVariableDto(e.Key, e.Visibility, e.UpdatedAt)).ToList();
             return TypedResults.Ok(new VariablesDto(visible, missing, system));
@@ -737,6 +739,32 @@ public static partial class Endpoints
             return TypedResults.NoContent();
         })
         .WithName("setVariable");
+
+        // A secret cannot become plain in place: its versions were concealed, and a run pinned to one would be given it as public.
+        // This deletes every one of them, once nothing holds them, and stores the new value as the next version, plain.
+        group.MapPost("/make-plain", async (VariableMakePlain request, HttpContext http, RunEngine engine, RevisionCache revisions, OrchestratorSignal signal,
+            CancellationToken ct) =>
+        {
+            await engine.ExecuteAsync(async (db, services) =>
+            {
+                VariableStore.CheckUserKey(request.Key);
+                var versions = await db.StoreVersions.AsNoTracking().Where(v => v.Key == request.Key).Select(v => v.Version).ToListAsync(ct);
+                var pinning = new List<string>();
+                foreach (var version in versions)
+                {
+                    pinning.AddRange(await VariableUses.PinningAsync(db, revisions, request.Key, version, ct));
+                }
+
+                await services.GetRequiredService<VariableStore>().MakePlainAsync(request.Key, request.Value, pinning,
+                    http.User.Identity?.Name ?? "administrator", request.Note, request.ExpectedCurrentVersion, ct);
+                return true;
+            }, ct);
+
+            // Steps blocked on a host key stored as a secret can continue.
+            signal.Wake();
+            return TypedResults.NoContent();
+        })
+        .WithName("makeVariablePlain");
 
         group.MapDelete("", async (string key, HttpContext http, RunEngine engine, RevisionCache revisions, RepositoryMirror mirror, CancellationToken ct) =>
         {

@@ -5106,6 +5106,59 @@
         }
       }
     },
+    "/api/variables/make-plain": {
+      "post": {
+        "tags": [
+          "Variables"
+        ],
+        "operationId": "makeVariablePlain",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VariableMakePlain"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
     "/api/variables/purge": {
       "post": {
         "tags": [
@@ -9175,7 +9228,8 @@
       "MissingVariableDto": {
         "required": [
           "key",
-          "usedBy"
+          "usedBy",
+          "mustBePlain"
         ],
         "type": "object",
         "properties": {
@@ -9187,6 +9241,9 @@
             "items": {
               "type": "string"
             }
+          },
+          "mustBePlain": {
+            "type": "boolean"
           }
         }
       },
@@ -11812,7 +11869,8 @@
           "revoked",
           "lines",
           "newerVersion",
-          "purgeExcluded"
+          "purgeExcluded",
+          "mustBePlain"
         ],
         "type": "object",
         "properties": {
@@ -11871,6 +11929,35 @@
           },
           "purgeExcluded": {
             "type": "boolean"
+          },
+          "mustBePlain": {
+            "type": "boolean"
+          }
+        }
+      },
+      "VariableMakePlain": {
+        "required": [
+          "key",
+          "value",
+          "expectedCurrentVersion"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "expectedCurrentVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "note": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

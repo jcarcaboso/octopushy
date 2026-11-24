@@ -696,13 +696,21 @@ public sealed record VariableDto(
     bool Revoked,
     int? Lines,
     int? NewerVersion,
-    bool PurgeExcluded);
+    bool PurgeExcluded,
+    bool MustBePlain);
 
-public sealed record MissingVariableDto(string Key, IReadOnlyList<string> UsedBy);
+/// <param name="MustBePlain">A definition at the head names it as a host key, which runs take only from a plain entry.</param>
+public sealed record MissingVariableDto(string Key, IReadOnlyList<string> UsedBy, bool MustBePlain);
 
 public sealed record SystemVariableDto(string Key, string Visibility, DateTimeOffset UpdatedAt);
 
 public sealed record VariablesDto(IReadOnlyList<VariableDto> Entries, IReadOnlyList<MissingVariableDto> Missing, IReadOnlyList<SystemVariableDto> System);
+
+/// <summary>
+/// Replaces a secret with a plain value: every version of the secret is deleted, and <c>Value</c> becomes the next version,
+/// plain and active. <c>ExpectedCurrentVersion</c> is the active version the caller saw.
+/// </summary>
+public sealed record VariableMakePlain(string Key, string Value, int ExpectedCurrentVersion, string? Note = null);
 
 /// <summary>
 /// Sets a value, which becomes the active version at once, for a new key and for an existing one, secret or plain. Without a

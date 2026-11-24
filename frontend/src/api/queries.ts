@@ -16,6 +16,7 @@ import type {
   TokenRequest,
   TrustInstallationRequest,
   VariableCandidate,
+  VariableMakePlain,
   VariablePromotion,
   VariableRevocation,
   VariableUpdate,
@@ -711,6 +712,21 @@ export function useRevokeVariable() {
     mutationFn: (body: VariableRevocation) => unwrap(api.POST("/api/variables/revoke", { body })),
     onSettled: () => {
       void client.invalidateQueries({ queryKey: keys.variables });
+      void client.invalidateQueries({ queryKey: ["run"] });
+    },
+  });
+}
+
+/** Replaces a secret with a plain value: the server deletes every secret version and saves the value as the next one. */
+export function useMakeVariablePlain() {
+  const client = useQueryClient();
+  return useMutation({
+    gcTime: 0,
+    mutationFn: (body: VariableMakePlain) => unwrap(api.POST("/api/variables/make-plain", { body })),
+    onSettled: (_, __, { key }) => {
+      void client.invalidateQueries({ queryKey: keys.variables });
+      void client.invalidateQueries({ queryKey: keys.variableVersions(key) });
+      // A blocked step may continue now.
       void client.invalidateQueries({ queryKey: ["run"] });
     },
   });

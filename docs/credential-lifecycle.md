@@ -93,7 +93,8 @@ All endpoints require the existing authenticated administrator session:
 
 | Endpoint | Behavior |
 | --- | --- |
-| `PUT /api/variables` | `{key, value?, visibility?, description?, note?, expectedCurrentVersion?}`. Creates a key, or adds a version of an existing one, plain or secret, and makes it active at once. Records the signed-in user and the note. Without `value`, only the description changes. An empty value for an existing secret is refused, and so is making a secret plain. |
+| `PUT /api/variables` | `{key, value?, visibility?, description?, note?, expectedCurrentVersion?}`. Creates a key, or adds a version of an existing one, plain or secret, and makes it active at once. Records the signed-in user and the note. Without `value`, only the description changes. An empty value for an existing secret is refused, and so is making a secret plain: use `make-plain`. |
+| `POST /api/variables/make-plain` | `{key, value, expectedCurrentVersion, note?}`. Replaces a secret with a plain value; see [making a secret plain](#making-a-secret-plain). |
 | `POST /api/variables/candidates` | `{key, value, description?}` → `{version}`; existing secret only. |
 | `GET /api/variables/versions?key=…` | Metadata and usage only. |
 | `POST /api/variables/versions/reveal` | `{key, version}` → `{key, version, value}`: one version's value, whatever its state, for comparing versions. A version that does not exist, and keys under `system/`, are refused. The server logs who revealed which version. |
@@ -154,6 +155,19 @@ first, or delete the key. It is refused too, naming what holds it, while a
 definition in the head revision, or in the one the scheduler observes from,
 pins that version; or a run or an attempt that has not finished pinned it or
 asked for it, or was given it. The resolution records of who received it stay.
+
+**Making a secret plain.** A secret is never made plain in place: a run that
+pinned one of its versions would be given it as a public value. Make plain on a
+secret's Details, or on the warning a secret gets when a definition names it as a
+host key (`access.hostKey`, `snippets.hosts.<host>.hostKey`), takes a new value.
+Every version of the secret is deleted, as deleting a version deletes one, and
+the new value is saved as the next version, plain and active. The key stays, so
+what uses it keeps using it, and the resolution records of who received which
+version stay. It is refused while a definition pins one of its versions, or a run
+or an attempt that has not finished pinned one, asked for one or was given one. A
+run that binds the key without having pinned a version, such as one blocked
+because its host key was a secret, takes the new value. **Set** on a key that is
+referenced but not set starts as plain when a definition names it as a host key.
 
 Outputs are parsed before they are masked. Strings are masked as they read once
 decoded, whatever JSON escaped in them, and stay strings. Nothing else is

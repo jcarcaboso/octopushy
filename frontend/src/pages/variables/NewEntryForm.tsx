@@ -9,9 +9,13 @@ import { FormatLine, ValueEditor } from "./ValueText";
 // The server's pattern, and the storeRef schema's.
 const keyPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/;
 
+export type Visibility = "secret" | "plain";
+
 interface Props {
   /** The key to start from: the folder being browsed plus "/", or a key that is referenced but not set. */
   initialKey: string;
+  /** Plain for a key a definition names as a host key, which runs refuse to take from a secret, while the key is that one. */
+  initialVisibility?: Visibility;
   backLabel: string;
   existingKeys: ReadonlySet<string>;
   onOpen: (key: string) => void;
@@ -21,14 +25,17 @@ interface Props {
 }
 
 /** Sets a new key. Rendered only while open, so each opening starts empty. */
-export function NewEntryForm({ initialKey, backLabel, existingKeys, onOpen, onSaved, onCancel, onDirty }: Props) {
+export function NewEntryForm({ initialKey, initialVisibility = "secret", backLabel, existingKeys, onOpen, onSaved, onCancel, onDirty }: Props) {
   const save = useSetVariable();
   const [key, setKey] = useState(initialKey);
-  const [visibility, setVisibility] = useState<"secret" | "plain">("secret");
+  // Only what the operator picks overrides the default, and the default holds only for the key the form opened with.
+  const [chosen, setVisibility] = useState<Visibility | null>(null);
   const [description, setDescription] = useState("");
   const [value, setValue] = useState("");
 
   const trimmed = key.trim();
+  const hostKey = initialVisibility === "plain" && trimmed === initialKey.trim();
+  const visibility = chosen ?? (hostKey ? "plain" : "secret");
   const keyValid = keyPattern.test(trimmed) && !trimmed.startsWith("system/");
   const keyWrong = !keyValid && key !== "" && key !== initialKey;
   const exists = existingKeys.has(trimmed);
@@ -128,6 +135,11 @@ export function NewEntryForm({ initialKey, backLabel, existingKeys, onOpen, onSa
         {visibility === "secret"
           ? "A secret is concealed once saved, given to the runs that use it, and shown only when revealed."
           : "A plain value is shown in the interface."}
+        {hostKey
+          ? visibility === "plain"
+            ? " A definition names this key as a host key, which is public."
+            : " A definition names this key as a host key: runs refuse a host key stored as a secret."
+          : null}
       </p>
 
       <div className="field">

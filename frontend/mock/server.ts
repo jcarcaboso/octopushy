@@ -355,7 +355,8 @@ on("PUT", "/api/variables", ({ body }) => {
     return problem(409, expected === 0 ? `'${key}' is already set.` : `v${activeNow(key)} of '${key}' became active meanwhile.`);
   }
   const visibility = (body.visibility as string | null) ?? existing?.visibility ?? "secret";
-  const entry = existing ?? { key, visibility, description: null, version: 0, latestVersion: 0, updatedAt: now(), value: null, usedBy: [], revoked: false, lines: null, newerVersion: null, purgeExcluded: false };
+  const mustBePlain = data.variables.missing.some((m) => m.key === key && m.mustBePlain);
+  const entry = existing ?? { key, visibility, description: null, version: 0, latestVersion: 0, updatedAt: now(), value: null, usedBy: [], revoked: false, lines: null, newerVersion: null, purgeExcluded: false, mustBePlain };
   entry.description = (body.description as string | null) ?? null;
   if (typeof body.value === "string") {
     entry.visibility = visibility;
@@ -364,6 +365,16 @@ on("PUT", "/api/variables", ({ body }) => {
   if (!existing) data.variables.entries.push(entry);
   data.summarizeVariable(entry);
   data.variables.missing = data.variables.missing.filter((m) => m.key !== key);
+});
+on("POST", "/api/variables/make-plain", ({ body }) => {
+  const key = String(body.key);
+  const entry = findVariable(key);
+  if (!entry || entry.visibility !== "secret") return problem(400, `'${key}' is not a secret.`);
+  if (body.expectedCurrentVersion !== activeNow(key)) return problem(409, `v${activeNow(key)} of '${key}' became active meanwhile.`);
+  data.variableHistory.set(key, []);
+  entry.visibility = "plain";
+  newVersion(key, String(body.value), "active", body.note);
+  data.summarizeVariable(entry);
 });
 on("DELETE", "/api/variables", ({ query }) => {
   const key = query.get("key") ?? "";

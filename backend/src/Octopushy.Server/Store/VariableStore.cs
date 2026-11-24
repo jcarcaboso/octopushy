@@ -401,6 +401,88 @@ public sealed partial class VariableStore(OctopushyDb db, Envelope envelope, Tim
         }
     }
 
+    /// <summary>
+    /// Replaces a secret with a plain value, for one that should have been public, such as a host key. A secret is never made
+    /// plain in place, since a run that pinned one of its versions would be given it as a public value: every version's encrypted
+    /// value goes, as <see cref="DeleteVersionAsync"/> deletes one, and <paramref name="value"/> becomes the next version, plain and
+    /// active. The key stays, and so does who received which version. Refused while a definition pins one of its versions, or a
+    /// run or an attempt that has not finished pinned one, asked for one or was given one. A run that binds the key without
+    /// pinning a version takes the new value.
+    /// </summary>
+    /// <param name="referencedBy">The definitions that pin a version of the key: see <see cref="Api.VariableUses.PinningAsync"/>.</param>
+    public async Task MakePlainAsync(string key, string value, IReadOnlyCollection<string> referencedBy, string actor, string? note,
+        int expectedCurrentVersion, CancellationToken cancellationToken)
+    {
+        CheckUserKey(key);
+        CheckOptionalNote(note);
+        if (string.IsNullOrEmpty(value))
+        {
+            throw new StoreException("The plain value must not be empty.");
+        }
+
+        var entry = await db.StoreEntries.AsNoTracking().FirstOrDefaultAsync(e => e.Key == key, cancellationToken)
+            ?? throw new StoreException($"There is no entry '{key}'.");
+        if (entry.Visibility != Visibilities.Secret)
+        {
+            throw new StoreException($"'{key}' is plain already.");
+        }
+
+        if (entry.CurrentVersion != expectedCurrentVersion)
+        {
+            throw new StoreConflictException("The active version changed. Refresh and review before saving.");
+        }
+
+        var users = new List<string>(referencedBy);
+        foreach (var number in await db.StoreVersions.AsNoTracking().Where(v => v.Key == key).Select(v => v.Version).ToListAsync(cancellationToken))
+        {
+            users.AddRange(await UnfinishedUsesAsync(key, cancellationToken, number));
+        }
+
+        users = users.Distinct(StringComparer.Ordinal).ToList();
+        if (users.Count > 0)
+        {
+            throw new StoreException($"The secret versions of '{key}' are still used by {string.Join(", ", users)}. Make it plain once nothing uses them.");
+        }
+
+        var now = clock.GetUtcNow();
+        var version = entry.LatestVersion + 1;
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        // Only the entry as it was checked: a version staged or made active since makes this a conflict, and nothing changes.
+        var updated = await db.StoreEntries
+            .Where(e => e.Key == key && e.Visibility == Visibilities.Secret && e.CurrentVersion == entry.CurrentVersion && e.LatestVersion == entry.LatestVersion)
+            .ExecuteUpdateAsync(e => e
+                .SetProperty(x => x.Visibility, Visibilities.Plain)
+                .SetProperty(x => x.LatestVersion, version)
+                .SetProperty(x => x.CurrentVersion, version)
+                .SetProperty(x => x.UpdatedAt, now), cancellationToken);
+        if (updated == 0)
+        {
+            throw new StoreConflictException("The entry changed concurrently. Refresh and try again.");
+        }
+
+        await db.StoreVersions.Where(v => v.Key == key).ExecuteDeleteAsync(cancellationToken);
+        foreach (var tracked in db.ChangeTracker.Entries<StoreEntry>().Where(e => e.Entity.Key == key).Cast<Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry>()
+            .Concat(db.ChangeTracker.Entries<StoreVersion>().Where(e => e.Entity.Key == key)).ToList())
+        {
+            tracked.State = EntityState.Detached;
+        }
+
+        var (ciphertext, wrapped) = envelope.Seal(Encoding.UTF8.GetBytes(value), Context(key, version));
+        db.StoreVersions.Add(new StoreVersion
+        {
+            Key = key,
+            Version = version,
+            Ciphertext = ciphertext,
+            WrappedKey = wrapped,
+            CreatedAt = now,
+            ActivatedAt = now,
+            ActivatedBy = actor,
+            ActivationNote = Trimmed(note),
+        });
+        await SaveAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     /// <summary>Deletes a server-owned key and its versions, which nothing else refers to, keeping its last version number.</summary>
     public async Task DeleteInternalAsync(string key, string actor, CancellationToken cancellationToken)
     {

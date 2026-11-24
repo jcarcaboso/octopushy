@@ -43,6 +43,21 @@ public class ManagedHostKeyDefinitionTests
     }
 
     [Fact]
+    public void A_host_key_is_a_use_that_must_be_plain_and_a_credential_is_not()
+    {
+        using var test = ManagedHostKeyTests.Managed(declaredPin: true);
+        // A secret given to the playbook under the name hostKey is still a secret.
+        var guestFile = "labs/home/proxmox/korriban/guests/krb-app-01/guest.yaml";
+        Edit(test, guestFile, "  tailscale_key: { store: app/tailscale }\n", "  tailscale_key: { store: app/tailscale }\n  hostKey: { store: app/named-host-key }\n");
+        var uses = LabRepositoryLoader.Load(test.Root).StoreUses;
+        Assert.Contains(uses, u => u.Key == "app/named-host-key" && !u.Plain);
+        Assert.Contains(uses, u => u.Key == "proxmox/korriban/ssh-host-key" && u.Plain);
+        Assert.Contains(uses, u => u.Key == "access/app/host-key" && u.Plain);
+        Assert.Contains(uses, u => u.Key == "proxmox/korriban/read-only-token" && !u.Plain);
+        Assert.DoesNotContain(uses, u => u.Plain && !u.Key.EndsWith("host-key", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void The_datastore_user_and_address_can_be_set()
     {
         using var test = ManagedHostKeyTests.Managed();

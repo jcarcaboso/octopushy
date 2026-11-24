@@ -451,6 +451,10 @@ public sealed partial class LabRepositoryLoader
         }
     }
 
+    /// <summary>A guest's access.hostKey and an installation's snippets.hosts.&lt;host&gt;.hostKey: public, and runs take them only from a plain entry.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex("^(?:/access/hostKey|/snippets/hosts/[^/]+/hostKey)$")]
+    private static partial System.Text.RegularExpressions.Regex HostKeyPointer();
+
     [System.Text.RegularExpressions.GeneratedRegex("^[a-z][a-z0-9_]{0,62}$")]
     private static partial System.Text.RegularExpressions.Regex SlotName();
 
@@ -1011,7 +1015,7 @@ public sealed partial class LabRepositoryLoader
                     var version = obj["version"] is JsonValue value && value.TryGetValue<int>(out var number) && number > 0
                         ? number
                         : (int?)null;
-                    _storeUses.Add(new StoreUse(storeKey, consumer, file, version));
+                    _storeUses.Add(new StoreUse(storeKey, consumer, file, version, HostKeyPointer().IsMatch(pointer)));
                     if (storeKey.StartsWith(SystemScope, StringComparison.Ordinal))
                     {
                         Error(file, document.LineOf(pointer), $"The key '{storeKey}' is in the system scope, which definitions cannot use.",

@@ -1,7 +1,7 @@
 import { ArrowLeft, Download, Eye, EyeOff, Lock, Maximize2, Minimize2, Pencil, Replace, Trash2, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "../../api/client";
-import { useDeleteVariable, useSetPurgeExclusion, useSetVariable, useStageVariable } from "../../api/queries";
+import { useDeleteVariable, useMakeVariablePlain, useSetPurgeExclusion, useSetVariable, useStageVariable } from "../../api/queries";
 import type { Variable } from "../../api/types";
 import { Callout } from "../../components/Callout";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
@@ -97,15 +97,19 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
   const [notice, setNotice] = useState<string | null>(null);
   const [description, setDescription] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  /** The plain value that replaces the secret, and the version it replaces, while that dialog is open. */
+  const [plain, setPlain] = useState<{ text: string; version: number } | null>(null);
+  const [plainNote, setPlainNote] = useState("");
   const save = useSetVariable();
   const stage = useStageVariable();
   const describe = useSetVariable();
   const remove = useDeleteVariable();
   const exclusion = useSetPurgeExclusion();
+  const makePlain = useMakeVariablePlain();
 
   const changed = edit ? (edit.base === undefined ? edit.text !== "" : edit.text !== edit.base) : false;
   const stale = edit !== null && edit.version !== entry.version;
-  const dirty = changed || (description !== null && description !== (entry.description ?? ""));
+  const dirty = changed || (description !== null && description !== (entry.description ?? "")) || Boolean(plain?.text);
   useEffect(() => onDirty(dirty), [dirty, onDirty]);
   useEffect(() => () => onDirty(false), [onDirty]);
 
@@ -129,6 +133,18 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
       setOpening(false);
     }
     if (typeof value === "string") setEdit({ mode: "modify", base: value, text: value, version: entry.version });
+  }
+
+  function startMakePlain() {
+    makePlain.reset();
+    setPlainNote("");
+    setPlain({ text: "", version: entry.version });
+  }
+
+  function closeMakePlain() {
+    setPlain(null);
+    setPlainNote("");
+    makePlain.reset();
   }
 
   function saved() {
@@ -404,6 +420,19 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
 
       {tab === "value" ? (
         <div className="stack">
+          {secret && entry.mustBePlain && !edit ? (
+            <Callout
+              kind="warning"
+              title="A host key stored as a secret"
+              actions={
+                <button type="button" className="button button--small" onClick={startMakePlain}>
+                  Make plain
+                </button>
+              }
+            >
+              A definition names this key as a host key, which is public. Runs refuse a host key stored as a secret, so make it plain.
+            </Callout>
+          ) : null}
           {entry.revoked && !edit ? (
             <Callout kind="danger" title="The active version is revoked">
               New runs need a version that is not revoked. Make another version active from Versions, or save a new value.
@@ -489,6 +518,19 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
             {entry.usedBy.length > 0 ? <p className="muted small">A new active version starts one setup run for each of these.</p> : null}
           </section>
           {secret ? (
+            <section className="vars-details__section" aria-labelledby="vars-visibility">
+              <h3 id="vars-visibility" className="vars-label">
+                Visibility
+              </h3>
+              <div className="vars-details__line">
+                <span>Secret. Concealed, and shown only when revealed.</span>
+                <button type="button" className="link-button small" onClick={startMakePlain}>
+                  Make plain
+                </button>
+              </div>
+            </section>
+          ) : null}
+          {secret ? (
             <section className="vars-details__section" aria-labelledby="vars-purge">
               <h3 id="vars-purge" className="vars-label">
                 Purge
@@ -526,6 +568,50 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
       ) : null}
 
       <ConfirmDialog
+        open={plain !== null}
+        title={`Make ${entry.key} plain?`}
+        confirmLabel="Make plain"
+        danger
+        pending={makePlain.isPending}
+        disabled={!plain?.text}
+        error={makePlain.error}
+        onClose={closeMakePlain}
+        onConfirm={() => {
+          if (!plain?.text) return;
+          makePlain.mutate(
+            { key: entry.key, value: plain.text, expectedCurrentVersion: plain.version, note: plainNote.trim() || null },
+            {
+              onSuccess: () => {
+                closeMakePlain();
+                onHide();
+              },
+            },
+          );
+        }}
+      >
+        <p>
+          A secret is not made plain in place. Every version of it is deleted, and the value you enter here is saved as the next version,
+          plain and active: shown in the interface and readable through the API. What each run was given stays on record.
+        </p>
+        <ValueEditor
+          label="Plain value"
+          value={plain?.text ?? ""}
+          onChange={(text) => setPlain((current) => current && { ...current, text })}
+          placeholder="Paste the value. Never a credential."
+          minRows={3}
+          autoFocus
+        />
+        <input
+          aria-label="Note, optional"
+          placeholder="Note, optional"
+          value={plainNote}
+          onChange={(event) => setPlainNote(event.target.value)}
+          autoComplete="off"
+        />
+        <p className="muted small">It is refused while a definition, a run or an attempt still holds one of its versions.</p>
+      </ConfirmDialog>
+
+      <ConfirmDialog
         open={deleting}
         title={`Delete ${entry.key}?`}
         confirmLabel="Delete"
@@ -553,6 +639,7 @@ export function EntryPane({ entry, backLabel, full, onToggleFull, onClose, revea
           <>
             <p>It is still used by these, so it can be deleted only once they no longer use it:</p>
             <UsedBy usedBy={entry.usedBy} />
+            {secret ? <p className="muted small">To store it as plain instead, close this and use Make plain in Details: the key stays, and its secret versions go.</p> : null}
           </>
         ) : (
           <p className="muted small">It is refused while a definition, an open change or a run that has not finished still uses it.</p>
