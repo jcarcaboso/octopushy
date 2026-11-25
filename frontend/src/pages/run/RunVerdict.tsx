@@ -63,6 +63,29 @@ function Headline({ detail, tiles }: { detail: RunDetail; tiles: Tile[] }) {
       </div>
     );
   }
+  // A playbook run is about the first thing it prepared differently from the last run.
+  const changed = tiles.flatMap((t) => (t.prepared?.compared ? t.prepared.items : [])).filter((item) => item.mark !== "");
+  const thing = changed.find((item) => item.mark === "~" && item.before !== undefined && item.after !== undefined && item.before !== item.after);
+  if (thing?.before !== undefined && thing.after !== undefined) {
+    const others = changed.length - 1;
+    // Two long versions side by side do not fit a line at the size of "32 → 64 GiB".
+    const long = thing.before.length + thing.after.length > 28;
+    return (
+      <div className="verdict__headline">
+        <span className={long ? "verdict__bump verdict__bump--long mono" : "verdict__bump mono"}>
+          <span className="verdict__old">{thing.before}</span>
+          <span className="verdict__arrow" aria-label="to">→</span>
+          <span className="verdict__new">
+            <Emphasized before={thing.before} after={thing.after} />
+          </span>
+        </span>
+        <span className="verdict__what">
+          <span className="mono">{thing.name}</span>
+          {others > 0 ? ` and ${others} other${others === 1 ? "" : "s"}` : null}
+        </span>
+      </div>
+    );
+  }
   const tile = tileHeadline(tiles);
   if (!tile) return null;
   const [before, rest] = tile.value.split(" → ");

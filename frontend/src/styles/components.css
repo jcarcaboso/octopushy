@@ -1414,3 +1414,94 @@ a.badge:hover {
 .workflow-card__title {
   font-weight: 650;
 }
+
+/* What a run changed, in a list of runs */
+.run-changes {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.run-changes--none {
+  color: var(--text-faint);
+}
+
+.run-change {
+  display: inline-flex;
+  gap: 0.4em;
+  align-items: baseline;
+  white-space: nowrap;
+}
+
+.run-change__name {
+  font-weight: 550;
+}
+
+.run-change__value {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.run-change__value b {
+  font-weight: 400;
+  color: var(--text);
+}
+
+.run-change__value--gone {
+  text-decoration: line-through;
+  text-decoration-color: var(--danger-fg);
+}
+
+/* Runs that found nothing new, folded into one row */
+.table .row--fold > td {
+  padding: 0;
+}
+
+.run-fold {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.run-fold:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.run-fold:focus-visible {
+  outline-offset: -2px;
+}
+
+.run-fold__chevron {
+  flex: none;
+  color: var(--text-faint);
+  transition: transform 0.12s;
+}
+
+.run-fold[aria-expanded="true"] .run-fold__chevron {
+  transform: rotate(90deg);
+}
+
+.run-fold__range {
+  margin-left: auto;
+  padding-left: var(--space-4);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.table .row--folded > td {
+  background: var(--surface-2);
+}

@@ -116,7 +116,20 @@ public sealed record RunSummaryDto(
     string? Waiting,
     IReadOnlyList<RunStepSummaryDto> Steps,
     bool CanCancel,
-    string? ReasonDetail = null);
+    string? ReasonDetail = null,
+    /// <summary>The workflow action a configure run runs, such as <c>update-tools</c>; null for any other run.</summary>
+    string? Action = null,
+    /// <summary>
+    /// What the run changes against what was there before, a line each: empty when it compared and found nothing new, null
+    /// when it compared nothing, as in a first run and in a run made before this was kept.
+    /// </summary>
+    IReadOnlyList<RunChangeDto>? Changes = null);
+
+/// <summary>
+/// One thing a run changes, as a list of runs names it: a tool's release, an image's version, a machine's setting.
+/// <paramref name="Before"/> is null for something new and <paramref name="After"/> for something removed.
+/// </summary>
+public sealed record RunChangeDto(string Name, string? Before, string? After);
 
 /// <summary>
 /// A run's step as a list of runs shows it: its place in the run's progress, what the plan of an unfinished run would

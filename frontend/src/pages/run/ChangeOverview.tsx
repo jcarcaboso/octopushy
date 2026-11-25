@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import { emphasize, type Row, type Tile } from "../../lib/changes";
+import { PreparedItems } from "./Prepared";
 
 const markClass: Record<Row["mark"], string> = { "+": "add", "−": "remove", "±": "remove", "~": "", "": "" };
 
@@ -65,6 +66,14 @@ export function UnchangedToggle({ count, shown, onToggle }: { count: number; sho
 /** A tile's rows as a table, with its unchanged rows behind a toggle. */
 export function ChangeRows({ tile }: { tile: Tile }) {
   const [showUnchanged, setShowUnchanged] = useState(false);
+  if (tile.prepared) {
+    return (
+      <>
+        {tile.heading ? <div className="overview__heading mono">{tile.heading}</div> : null}
+        <PreparedItems comparison={tile.prepared} />
+      </>
+    );
+  }
   return (
     <>
       {tile.heading ? <div className="overview__heading mono">{tile.heading}</div> : null}

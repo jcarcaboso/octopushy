@@ -9,8 +9,7 @@ import { RelativeTime } from "../components/RelativeTime";
 import { EmptyState, ErrorMessage, PageSkeleton, Spinner } from "../components/States";
 import { runStatuses, statusStyle } from "../components/status";
 import { useNow } from "../components/useNow";
-import { operationLabel } from "../lib/format";
-import { reasonShort, runProgress, runSection, runTarget, type RunProgress, type RunSection, type RunTarget } from "../lib/runs";
+import { reasonShort, runProgress, runSection, runTarget, runTitle, type RunProgress, type RunSection, type RunTarget } from "../lib/runs";
 
 const sections: { id: RunSection; title: string }[] = [
   { id: "waiting", title: "Waiting for you" },
@@ -67,7 +66,7 @@ function RunRow({ run, now, onDecide }: { run: RunSummary; now: number; onDecide
   return (
     <li className="runs-row" onClick={open}>
       <Link to={`/runs/${run.id}`} className="runs-row__link">
-        <span className="runs-row__number">#{run.number}</span> {operationLabel(run.operation)}
+        <span className="runs-row__number">#{run.number}</span> {runTitle(run)}
       </Link>
       <span>
         <span className={`run-chip run-chip--${target.type.toLowerCase()}`}>
@@ -342,7 +341,7 @@ export function RunsPage() {
               <li key={run.id}>
                 <Link to={`/runs/${run.id}`}>#{run.number}</Link>{" "}
                 <strong>
-                  {operationLabel(run.operation)} {runTarget(run).name}
+                  {runTitle(run)} {runTarget(run).name}
                 </strong>
                 {progress.note ? <span className="muted">: {progress.note}</span> : null}
               </li>
@@ -364,7 +363,7 @@ export function RunsPage() {
         >
           <p>
             <strong>
-              {operationLabel(decision.run.operation)} {runTarget(decision.run).name}
+              {runTitle(decision.run)} {runTarget(decision.run).name}
             </strong>
             {decision.kind !== "cancel" && decision.progress.note ? <>: {decision.progress.note}</> : null}
           </p>

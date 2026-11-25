@@ -2370,6 +2370,11 @@ export interface components {
             workflowsRepository?: null | string;
             workflowsDigest?: null | string;
         };
+        RunChangeDto: {
+            name: string;
+            before: null | string;
+            after: null | string;
+        };
         RunDetailDto: {
             run: components["schemas"]["RunSummaryDto"];
             steps: components["schemas"]["StepDto"][];
@@ -2431,6 +2436,8 @@ export interface components {
             steps: components["schemas"]["RunStepSummaryDto"][];
             canCancel: boolean;
             reasonDetail?: null | string;
+            action?: null | string;
+            changes?: null | components["schemas"]["RunChangeDto"][];
         };
         RunWorkflowDto: {
             id: string;

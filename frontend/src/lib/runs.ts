@@ -1,6 +1,6 @@
 import type { RunSummary } from "../api/types";
 import { statusStyle, type Tone } from "../components/status";
-import { humanize } from "./format";
+import { humanize, operationLabel } from "./format";
 import { elapsed, formatDuration } from "./time";
 
 type Step = RunSummary["steps"][number];
@@ -28,6 +28,29 @@ export function runTarget(run: Pick<RunSummary, "address" | "resourceKind">): Ru
     default:
       return { type: "Other", name: run.address, host: null, node: null };
   }
+}
+
+/** One thing a run changed against the last run, as lists name it. */
+export type RunChange = NonNullable<RunSummary["changes"]>[number];
+
+/** "Update tools" for a configure run of `update-tools`; the operation's name for a run without an action. */
+export function runTitle(run: Pick<RunSummary, "action" | "operation">): string {
+  return run.action ? humanize(run.action) : operationLabel(run.operation);
+}
+
+/** A finished run that compared what it would change with the last run and found the same. */
+export const foundNothingNew = (run: RunSummary) => run.status === "succeeded" && run.changes?.length === 0;
+
+/** How many changes a list names before it counts the rest. */
+export const namedChanges = 2;
+
+/** "t3 v0.1.13, codex v0.168.0 +1", or "nothing new" for an empty list; null when the run compared nothing. */
+export function changesText(changes: RunSummary["changes"]): string | null {
+  if (!changes) return null;
+  if (changes.length === 0) return "nothing new";
+  const named = changes.slice(0, namedChanges).map((c) => `${c.name} ${c.after ?? "removed"}`);
+  const rest = changes.length - namedChanges;
+  return named.join(", ") + (rest > 0 ? ` +${rest}` : "");
 }
 
 export type RunSection = "waiting" | "progress" | "earlier";
@@ -58,7 +81,7 @@ export interface RunProgress {
   segments: SegmentTone[];
   label: string;
   tone: Tone;
-  /** A few words after the label: what the plan changes, why the run waits, how long it took. */
+  /** A few words after the label: what the run changed or will change, why it waits, how long it took. */
   note: string | null;
   /** The whole progress in words, for a screen reader. */
   description: string;
@@ -96,9 +119,9 @@ export function runProgress(run: RunSummary, now = Date.now()): RunProgress {
   let note: string | null;
   if (succeeded) {
     const took = elapsed(run.startedAt, run.finishedAt, now);
-    note = took === null ? null : formatDuration(took);
+    note = [changesText(run.changes), took === null ? null : formatDuration(took)].filter(Boolean).join(" · ") || null;
   } else if (approval) {
-    note = countsText(run.steps) ?? run.detail;
+    note = (run.changes?.length ? changesText(run.changes) : null) ?? countsText(run.steps) ?? run.detail;
   } else if (ended) {
     note = run.detail;
   } else {

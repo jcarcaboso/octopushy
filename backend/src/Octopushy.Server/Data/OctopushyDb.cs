@@ -155,6 +155,7 @@ public sealed class OctopushyDb(DbContextOptions<OctopushyDb> options) : DbConte
             e.HasIndex(x => x.CreatedAt);
             e.HasIndex(x => x.Status);
             e.Property(x => x.Context).HasColumnType("jsonb");
+            e.Property(x => x.Changes).HasColumnType("jsonb");
             e.HasMany(x => x.Steps).WithOne(x => x.Run).HasForeignKey(x => x.RunId).OnDelete(DeleteBehavior.Cascade);
         });
 

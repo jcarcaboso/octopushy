@@ -1658,9 +1658,17 @@ namespace Octopushy.Server.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<string>("Action")
+                        .HasColumnType("text")
+                        .HasColumnName("action");
+
                     b.Property<string>("BlockReason")
                         .HasColumnType("text")
                         .HasColumnName("block_reason");
+
+                    b.Property<string>("Changes")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("changes");
 
                     b.Property<string>("Commit")
                         .HasColumnType("text")

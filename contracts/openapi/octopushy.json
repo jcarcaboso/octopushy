@@ -10395,6 +10395,31 @@
           }
         }
       },
+      "RunChangeDto": {
+        "required": [
+          "name",
+          "before",
+          "after"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "before": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "after": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "RunDetailDto": {
         "required": [
           "run",
@@ -10671,6 +10696,21 @@
               "null",
               "string"
             ]
+          },
+          "action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "changes": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/RunChangeDto"
+            }
           }
         }
       },

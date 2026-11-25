@@ -248,6 +248,7 @@ public sealed partial class RunEngine
                 step.Outputs = null;
             }
 
+            Api.RunChanges.Refresh(run);
             run.Status = RunStatuses.Running;
             run.FinishedAt = null;
             run.Detail = null;
