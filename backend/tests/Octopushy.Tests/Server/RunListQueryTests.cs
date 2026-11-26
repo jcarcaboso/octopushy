@@ -60,6 +60,9 @@ public class RunListQueryTests(PostgresFixture postgres, ITestOutputHelper outpu
         Assert.Contains("\"address\":\"?\"", runs);
         Assert.Contains("\"canCancel\":false", runs);
         Assert.Contains("\"canCancel\":true", runs);
+        Assert.Contains("\"action\":\"deploy\"", runs);
+        Assert.Contains("\"changes\":[{\"name\":\"web\",\"before\":\"1.26\",\"after\":\"1.27\"}]", runs);
+        Assert.Contains("\"changes\":[]", runs);
         Assert.Contains("\"failed\":[{", await ReadAsync(client, "/api/overview", wholeRuns: false));
     }
 
@@ -161,6 +164,11 @@ public class RunListQueryTests(PostgresFixture postgres, ITestOutputHelper outpu
             Detail = detail,
             Commit = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
             Context = context,
+            Action = operation == Operations.Configure ? "deploy" : null,
+            // What a run changes is stored on it, whatever it is made from: the lists read it and not the context.
+            Changes = operation == Operations.Pipeline
+                ? "[{\"name\":\"web\",\"before\":\"1.26\",\"after\":\"1.27\"}]"
+                : operation == Operations.Configure ? "[]" : null,
             CreatedAt = Now - age,
             StartedAt = status == RunStatuses.Queued ? null : Now - age + TimeSpan.FromSeconds(5),
             FinishedAt = RunStatuses.IsTerminal(status) ? Now - age + TimeSpan.FromMinutes(3) : null,

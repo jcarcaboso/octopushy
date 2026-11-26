@@ -1,5 +1,8 @@
 import type { ConfigurePreview, Step } from "../api/types";
 import { summarizePlan, type PlanChange, type PlanSummary } from "./plan";
+import { comparePrepared, type PreparedComparison } from "./prepared";
+
+export { flatten, type Leaf } from "./prepared";
 
 /** The approval overview: one small tile per kind of change, each with the rows its detail lists. */
 
@@ -25,6 +28,8 @@ export interface Tile {
   heading?: string;
   rows: Row[];
   unchanged: Row[];
+  /** For prepared values: the comparison the rows come from, with the values behind each thing. */
+  prepared?: PreparedComparison;
 }
 
 export interface OverviewInput {
@@ -186,83 +191,32 @@ function resourcesTile(changes: PlanChange[]): Tile | null {
   };
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function leafText(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value === null || value === undefined) return "null";
-  return JSON.stringify(value);
-}
-
-/** A leaf as shown, and as JSON so that `false` and `"false"` still differ. */
-export interface Leaf {
-  text: string;
-  json: string;
-}
-
-/** Leaf paths of prepared JSON. A list of plain values stays one leaf, so a new item is not a shifted index. */
-export function flatten(value: unknown, path = ""): Map<string, Leaf> {
-  const leaves = new Map<string, Leaf>();
-  const walk = (node: unknown, at: string) => {
-    if (Array.isArray(node)) {
-      if (node.every((item) => !isObject(item) && !Array.isArray(item))) {
-        leaves.set(at, { text: node.map(leafText).join(", "), json: JSON.stringify(node) });
-      } else {
-        node.forEach((item, i) => walk(item, `${at}[${i}]`));
-      }
-    } else if (isObject(node) && Object.keys(node).length > 0) {
-      for (const [key, child] of Object.entries(node)) walk(child, at ? `${at}.${key}` : key);
-    } else {
-      leaves.set(at, { text: isObject(node) ? "{}" : leafText(node), json: JSON.stringify(node ?? null) });
-    }
-  };
-  walk(value, path);
-  return leaves;
-}
-
 function preparedTile(preview: ConfigurePreview, index: number): Tile | null {
-  if (preview.prepared === null || preview.prepared === undefined) return null;
-  const now = flatten(preview.prepared);
-  const name = (path: string) => path || "(value)";
-  const heading = `${preview.action} · ${preview.playbook}`;
-  const key = `prepared:${index}`;
-  const baseline = isObject(preview.previousPrepared) ? flatten(preview.previousPrepared) : null;
-  if (!baseline) {
+  const prepared = comparePrepared(preview.prepared, preview.previousPrepared);
+  if (!prepared) return null;
+  const { compared, items } = prepared;
+  const tile = { key: `prepared:${index}`, label: "Prepared", heading: `${preview.action} · ${preview.playbook}`, tone: "neutral" as const, prepared };
+  if (!compared) {
     return {
-      key, label: "Prepared", heading, tone: "neutral",
-      value: String(now.size),
+      ...tile,
+      value: String(items.length),
       sub: "first run · nothing to compare",
-      rows: [...now].map(([path, value]) => ({ mark: "", name: name(path), after: value.text })),
+      rows: items.map((item) => ({ mark: "", name: item.name, after: item.after })),
       unchanged: [],
     };
   }
-  const changed: Row[] = [];
-  const added: Row[] = [];
-  const removed: Row[] = [];
-  const unchanged: Row[] = [];
-  for (const [path, value] of now) {
-    const old = baseline.get(path);
-    if (old === undefined) added.push({ mark: "+", name: name(path), after: value.text });
-    else if (old.json !== value.json) changed.push({ mark: "~", name: name(path), before: old.text, after: value.text });
-    else unchanged.push({ mark: "", name: name(path), before: value.text });
-  }
-  for (const [path, value] of baseline) {
-    if (!now.has(path)) removed.push({ mark: "−", name: name(path), before: value.text });
-  }
+  const marked = (mark: Row["mark"]) => items.filter((item) => item.mark === mark);
   const parts = [
-    changed.length > 0 ? [String(changed.length), "changed"] : null,
-    added.length > 0 ? [`+${added.length}`, "added"] : null,
-    removed.length > 0 ? [`−${removed.length}`, "removed"] : null,
+    marked("~").length > 0 ? [String(marked("~").length), "changed"] : null,
+    marked("+").length > 0 ? [`+${marked("+").length}`, "added"] : null,
+    marked("−").length > 0 ? [`−${marked("−").length}`, "removed"] : null,
   ].filter((part): part is string[] => part !== null);
   return {
-    key, label: "Prepared", heading,
+    ...tile,
     value: parts.length > 0 ? parts.map((part) => part[0]).join(" ") : "no change",
     sub: parts.length > 0 ? parts.map((part) => part[1]).join(" · ") : "same as the last successful run",
-    tone: "neutral",
-    rows: [...changed, ...added, ...removed],
-    unchanged,
+    rows: items.filter((item) => item.mark !== "").map((item) => ({ mark: item.mark, name: item.name, before: item.before, after: item.after })),
+    unchanged: marked("").map((item) => ({ mark: "", name: item.name, before: item.before })),
   };
 }
 

@@ -2,6 +2,8 @@
 // that approving, rejecting and cancelling make. Times are relative to when the server started.
 import { createHash } from "node:crypto";
 import type { Attempt, ConfigurePreview, LogLine, Plan, RunDetail, RunSummary, Step } from "../src/api/types.ts";
+import { imageChanges } from "../src/lib/images.ts";
+import { preparedChanges } from "../src/lib/prepared.ts";
 
 export const started = Date.now();
 export const iso = (ms: number) => new Date(ms).toISOString();
@@ -792,7 +794,94 @@ function scenarios(): RunDetail[] {
       ],
     }));
   }
+  runs.push(...toolRuns());
+  // Runs older than the scenarios take the numbers below them, in the order they were made.
+  const scenarioCount = runs.filter((r) => Number(r.run.number) >= 44).length;
+  runs.sort((a, b) => Date.parse(b.run.createdAt) - Date.parse(a.run.createdAt));
+  runs.slice(scenarioCount).forEach((r, i) => {
+    r.run.number = 43 - i;
+  });
   return runs.map(refreshFlags);
+}
+
+interface Tool {
+  url: string;
+  sha256: string;
+}
+
+/** What `update-tools` resolved for one tool: where its release is downloaded from, and its checksum. */
+function tool(name: string, version: string, repository: string): Tool {
+  return {
+    url: `https://github.com/example/${repository}/releases/download/v${version}/${name}-${version}-linux-x64.tar.gz`,
+    sha256: hex(`${name}-${version}`),
+  };
+}
+
+/** bb's tools, updated each morning by a schedule: most days nothing is new. Newest first. */
+function toolRuns(): RunDetail[] {
+  const t3 = (build: string) => tool("t3", `0.1.12-nightly.${build}`, "t3code");
+  const claude = (version: string) => tool("claude-code", version, "claude-code");
+  const codex = (version: string) => tool("codex", version, "codex");
+  const prepared = (a: Tool, b: Tool, c: Tool) => ({
+    machine_tools_channel: "nightly",
+    machine_resolved_t3: a,
+    machine_resolved_claude_code: b,
+    machine_resolved_codex: c,
+  });
+  const names = ["Check for active work", "Install tools from the nightly channel", "Record the versions"];
+  // As `ansible-playbook --list-tasks` prints them, which is what a real preview holds.
+  const listed = (playbook: string) => [
+    `playbook: ${playbook}`,
+    "  play #1 (all): Update the machine's tools\tTAGS: []",
+    "    tasks:",
+    ...names.map((name) => `      machine-tools : ${name}\tTAGS: [tools]`),
+  ];
+  // Oldest first: each run compares with the one before it.
+  const days: { id: string; minutesAgo: number; seconds: number; reason: string; action?: string; values: Record<string, unknown> | null; files?: string[] }[] = [
+    { id: "tools-setup", minutesAgo: 10090, seconds: 257, reason: "revision", action: "setup", values: null, files: [] },
+    { id: "tools-hand", minutesAgo: 10070, seconds: 150, reason: "manual", values: prepared(t3("20261117.5171"), claude("2.1.49"), codex("0.161.0")) },
+    { id: "tools-codex", minutesAgo: 8640, seconds: 82, reason: "schedule", values: prepared(t3("20261117.5171"), claude("2.1.49"), codex("0.167.0")) },
+    { id: "tools-same-1", minutesAgo: 7200, seconds: 174, reason: "schedule", values: prepared(t3("20261117.5171"), claude("2.1.49"), codex("0.167.0")) },
+    { id: "tools-same-2", minutesAgo: 5760, seconds: 162, reason: "schedule", values: prepared(t3("20261117.5171"), claude("2.1.49"), codex("0.167.0")) },
+    { id: "tools-same-3", minutesAgo: 4320, seconds: 18300, reason: "schedule", values: prepared(t3("20261117.5171"), claude("2.1.49"), codex("0.167.0")) },
+    { id: "tools-t3", minutesAgo: 2880, seconds: 106, reason: "schedule", values: prepared(t3("20261123.5177"), claude("2.1.49"), codex("0.167.0")),
+      files: ["M modules/ansible/machine-tools/tasks/t3.yml"] },
+    { id: "tools-same-4", minutesAgo: 1440, seconds: 270, reason: "schedule", values: prepared(t3("20261123.5177"), claude("2.1.49"), codex("0.167.0")) },
+    { id: "tools-updated", minutesAgo: 320, seconds: 153, reason: "schedule", values: prepared(t3("20261124.5178"), claude("2.1.52"), codex("0.167.0")) },
+  ];
+  let previous: Record<string, unknown> | null = null;
+  const made = days.map((day, i) => {
+    const t = (s: number) => ago(day.minutesAgo, s);
+    const action = day.action ?? "update-tools";
+    const preview: ConfigurePreview = {
+      ...devPreview,
+      action,
+      playbook: action === "setup" ? "configure.yml" : "update-tools.yml",
+      host: resources.bb.host,
+      tasks: listed(action === "setup" ? "configure.yml" : "update-tools.yml"),
+      changedFiles: day.files ?? [],
+      vars: { hostname: "bb", machine_tools_channel: "nightly" },
+      secrets: [{ name: "machine_tools_token", reference: "proxmox/pve01/bb/machine_tools_token v3" }],
+      prepared: day.values,
+      previousPrepared: previous,
+      previewSha256: hex(`preview-${day.id}`),
+    };
+    previous = day.values ?? previous;
+    const detail = run({
+      id: day.id, number: 0, operation: "configure", resource: resources.bb, reason: day.reason, status: "succeeded", detail: null,
+      minutesAgo: day.minutesAgo, seconds: day.seconds, currentStep: null, policy: automatic, workflow: { id: "machine-tools", version: "1.4" },
+      steps: [
+        ran(day.id, 0, "preview", "succeeded", t(3), 21, ansiblePreview(preview.playbook, names), { configurePreview: preview }),
+        decided(preview.previewSha256!, t(25), "policy", "Approval is automatic (set by octopushy.yaml)."),
+        ran(day.id, 2, "playbook", "succeeded", t(27), day.seconds - 27, ansibleRun(resources.bb.host, names, recap("bb", 9, 2))),
+        { name: "outcome-approval", status: "skipped", detail: "The playbook finished." },
+        { name: "playbook-approved", status: "skipped", detail: "The playbook finished." },
+      ],
+    });
+    detail.run.commit = hex(`revision-${Math.ceil((days.length - i) / 2) + 1}`, 40);
+    return detail;
+  });
+  return made.reverse();
 }
 
 /** Every run, newest first. */
@@ -818,8 +907,79 @@ function refreshFlags(detail: RunDetail): RunDetail {
   return detail;
 }
 
-/** A run as lists show it. */
-export const summary = (detail: RunDetail): RunSummary => ({ ...detail.run });
+type RunChange = NonNullable<RunSummary["changes"]>[number];
+type PlanAttribute = Plan["changes"][number]["attributes"][number];
+
+/** A plan attribute as a list names it, or null for one lists leave out. */
+function attributeChange(attribute: PlanAttribute): RunChange | null {
+  const { name, before, after } = attribute;
+  if (attribute.sensitive || attribute.unknown || JSON.stringify(before) === JSON.stringify(after)) return null;
+  const plain = (value: unknown) => (value === null || value === undefined ? null : typeof value === "string" ? value : JSON.stringify(value));
+  const line = (label: string, text: (value: unknown) => string | null) => ({ name: label, before: text(before), after: text(after) });
+  const disk = /^disk\.([^.]+)\.size$/.exec(name);
+  if (disk) return line(`disk ${disk[1]}`, (v) => (v === null || v === undefined ? null : `${plain(v)} GiB`));
+  if (name === "memory.dedicated") {
+    const whole = [before, after].every((v) => typeof v !== "number" || v % 1024 === 0);
+    return line("memory", (v) => (typeof v === "number" ? (whole ? `${v / 1024} GiB` : `${v} MiB`) : plain(v)));
+  }
+  if (name === "cpu.cores" || name === "cpu.sockets") return line(name.replace(".", " "), plain);
+  const bridge = /^network_device\.(\d+)\.bridge$/.exec(name);
+  if (bridge) return line(`net${bridge[1]} bridge`, plain);
+  if (name === "tags") return line("tags", (v) => (Array.isArray(v) && v.length > 0 ? v.map(String).join(", ") : null));
+  return null;
+}
+
+const planKinds = ["create", "update", "replace", "delete"] as const;
+
+/** A resource change's kind as plan counts name it; null for a no-op or a read. */
+function planKind(actions: string[]): (typeof planKinds)[number] | null {
+  if (actions.includes("create") && actions.includes("delete")) return "replace";
+  return planKinds.find((kind) => actions.includes(kind)) ?? null;
+}
+
+/**
+ * What a run changed, as the server works it out for lists: each preview's prepared values against the last run's, each
+ * plan's attributes and the resources they leave unnamed, then a service's images. Null when the run compared nothing.
+ */
+function changesOf(detail: RunDetail): RunChange[] | null {
+  const changes: RunChange[] = [];
+  let compared = false;
+  for (const step of detail.steps) {
+    const preview = step.configurePreview;
+    // Only a configure run has a last run's values to compare with, as on the server: a pipeline's preview compares nothing.
+    const prepared = preview && detail.run.operation === "configure" ? preparedChanges(preview.prepared, preview.previousPrepared) : null;
+    if (prepared) {
+      compared = true;
+      changes.push(...prepared);
+    }
+    if (step.plan) {
+      compared = true;
+      const unnamed = new Map<string, number>();
+      for (const change of step.plan.changes) {
+        const lines = change.attributes.map(attributeChange).filter((line) => line !== null);
+        changes.push(...lines);
+        const kind = planKind(change.actions);
+        if (lines.length === 0 && kind) unnamed.set(kind, (unnamed.get(kind) ?? 0) + 1);
+      }
+      const counted = planKinds.filter((kind) => unnamed.has(kind)).map((kind) => `${unnamed.get(kind)} to ${kind}`);
+      if (counted.length > 0) changes.push({ name: "resources", before: null, after: counted.join(", ") });
+    }
+  }
+  if (detail.images && detail.images.length > 0) {
+    compared = true;
+    for (const image of imageChanges(detail.images).filter((c) => c.level !== "unchanged")) {
+      changes.push({ name: image.service, before: image.before, after: image.after });
+    }
+  }
+  return compared ? changes : null;
+}
+
+/** A run as lists show it: a configure run names its action. */
+export const summary = (detail: RunDetail): RunSummary => ({
+  ...detail.run,
+  action: detail.run.operation === "configure" ? (detail.steps.find((s) => s.configurePreview)?.configurePreview?.action ?? null) : null,
+  changes: changesOf(detail),
+});
 
 // Decisions and other changes to runs
 

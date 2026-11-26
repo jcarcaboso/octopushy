@@ -64,7 +64,9 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             RunStatuses.IsTerminal(run.Status) ? null : Plan(s)?.Counts,
             s.Kind == StepKinds.Approval ? s.PlanSha256 : null)).ToList(),
         CanCancel(run),
-        run.ReasonDetail);
+        run.ReasonDetail,
+        run.Action,
+        RunChanges.Read(run.Changes));
 
     /// <summary>Whether an agent is changing the run's target right now.</summary>
     public static bool Applying(Run run) => run.Steps.SelectMany(s => s.Attempts).Any(a => a.Mutating && AttemptStatuses.IsActive(a.Status));
@@ -97,6 +99,8 @@ public sealed partial class Views(OctopushyDb db, RevisionCache revisions, Repos
             CreatedAt = r.CreatedAt,
             StartedAt = r.StartedAt,
             FinishedAt = r.FinishedAt,
+            Action = r.Action,
+            Changes = r.Changes,
             Steps = r.Steps.Select(s => new Step
             {
                 Id = s.Id,

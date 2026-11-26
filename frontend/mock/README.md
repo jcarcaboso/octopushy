@@ -64,6 +64,19 @@ default.
 | [/runs/running](http://127.0.0.1:5176/runs/running) | #50, the dns container being created, with a live log |
 | [/runs/succeeded](http://127.0.0.1:5176/runs/succeeded) | #45, pbs set up |
 | [/runs/failed](http://127.0.0.1:5176/runs/failed) | #44, media's disk resize that ran out of space; offers Run again |
+| [/runs/tools-updated](http://127.0.0.1:5176/runs/tools-updated) | bb's scheduled `update-tools`: each tool is prepared as a download address and its checksum, and two of three moved to a new release |
+| [/runs/tools-same-4](http://127.0.0.1:5176/runs/tools-same-4) | the same run a day earlier, which prepared the same values as the run before it |
+
+bb has a week of these runs, one each morning, most of which found nothing new, after a first `setup` run with nothing to
+compare with. The runs older than the scenarios above are numbered by when they were made.
+
+Lists of runs (`GET /api/runs`, and the Runs card of a guest or service) get each run's `action` (a configure run's
+first preview action, null for any other run) and `changes`, worked out as the server does in `summary()`: each
+preview's prepared values against the last run's (`preparedChanges`), each plan's readable attributes plus one
+`resources` line for the resources they leave unnamed, then a service's images. A run that compared nothing (the
+`setup` run, the hand-started run with no previous values, a run with no plan, preview baseline or images) has none.
+On [/guests/bb](http://127.0.0.1:5176/guests/bb) the three scheduled runs in a row that found nothing new fold into one
+row; the one between two changes stays a row of its own.
 
 Also worth a look: [/guests/bb](http://127.0.0.1:5176/guests/bb), [/services/web-app](http://127.0.0.1:5176/services/web-app),
 [/installations/pve01](http://127.0.0.1:5176/installations/pve01), [/changes/change-bb-resize](http://127.0.0.1:5176/changes/change-bb-resize)

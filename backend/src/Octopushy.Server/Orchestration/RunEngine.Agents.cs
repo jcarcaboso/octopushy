@@ -1081,6 +1081,7 @@ public sealed partial class RunEngine
                         step.Status = StepStatuses.Succeeded;
                         step.Detail = late ? "The result arrived after the agent had stopped reporting." : null;
                         step.Outputs = outputs?.ToJsonString();
+                        RefreshChanges(run, step);
                         if (step.Status == StepStatuses.Succeeded)
                             await ApplyEffectsAsync(db, services.GetRequiredService<VariableStore>(), run, step, outputs, cancellationToken);
                         break;
@@ -1096,6 +1097,7 @@ public sealed partial class RunEngine
                         step.Status = StepStatuses.Failed;
                         step.Detail = attempt.Error ?? "The attempt failed.";
                         step.Outputs = outputs?.ToJsonString();
+                        RefreshChanges(run, step);
                         break;
                 }
 
@@ -1111,6 +1113,13 @@ public sealed partial class RunEngine
             _resultFailures.Remove(attemptId);
             return true;
         }, cancellationToken);
+    }
+
+    /// <summary>What the run changes is made from its plans' and previews' outputs: it is stored again when one of them is.</summary>
+    private static void RefreshChanges(Run run, Step step)
+    {
+        if (step.Name is StepNames.Plan or StepNames.Preview)
+            Api.RunChanges.Refresh(run);
     }
 
     /// <summary>Stores a running apply's state. Best effort: the result decides whether it is lost.</summary>

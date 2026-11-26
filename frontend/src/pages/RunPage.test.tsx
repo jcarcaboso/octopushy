@@ -135,7 +135,8 @@ it("shows what a configure run will do, and approves that preview", async () => 
   });
   renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
   await userEvent.click(await screen.findByRole("button", { name: /Preview/ }));
-  expect(screen.getByText("ops@10.15.60.10:22")).toBeTruthy();
+  // The page names the host once more, above the tasks the playbook runs.
+  expect(within(screen.getByRole("region", { name: "Preview" })).getByText("ops@10.15.60.10:22")).toBeTruthy();
   expect(screen.getByText("ssh-ed25519 SHA256:abcdef")).toBeTruthy();
   expect(screen.getByText("access/pve01-ai/ssh-key v2")).toBeTruthy();
   expect(screen.getByText("M modules/ansible/ai-server/site.yml")).toBeTruthy();
@@ -146,6 +147,79 @@ it("shows what a configure run will do, and approves that preview", async () => 
   await userEvent.click(screen.getByRole("button", { name: "Approve" }));
   await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
   expect(requests.find((r) => r.method === "POST")?.path).toBe("/api/runs/run-1/steps/step-approval/approve");
+});
+
+it("says what a playbook run changes as things, and lists the tasks it runs", async () => {
+  const release = (version: string) => ({
+    url: `https://example.org/t3code/releases/download/v${version}/t3-${version}-linux-x64.tar.gz`,
+    sha256: (version.replace(/\D/g, "") + "0123456789abcdef".repeat(4)).slice(0, 64),
+  });
+  const codex = { url: "https://example.org/codex/releases/download/v0.167.0/codex-0.167.0.tar.gz", sha256: "c".repeat(64) };
+  const detail = runDetail({ operation: "configure", status: "succeeded", currentStep: null });
+  detail.steps[0] = {
+    ...detail.steps[0],
+    name: "preview",
+    plan: null,
+    configurePreview: {
+      action: "update-tools",
+      playbook: "update-tools.yml",
+      commit: "e6b1282aa4d1c0ffee",
+      image: "docker.io/skorcius/octopushy:ansible-2.21.5-abc",
+      host: "ops@10.15.60.12:22",
+      toolVersion: "ansible-playbook [core 2.21.5]",
+      destructive: false,
+      tasks: ["playbook: update-tools.yml", "  play #1 (all): Update the tools\tTAGS: []", "    tasks:", "      Install the tools\tTAGS: []"],
+      changedFiles: [],
+      vars: {},
+      secrets: [],
+      prepared: { machine_resolved_t3: release("0.1.12-nightly.5178"), machine_resolved_codex: codex },
+      previousPrepared: { machine_resolved_t3: release("0.1.12-nightly.5177"), machine_resolved_codex: codex },
+      hostKeyFingerprints: [],
+      previewSha256: sha,
+    },
+  };
+  mockApi({ "GET /api/runs/run-1": () => detail });
+  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+
+  // The action and its playbook, not just "Configure"; the summary leads with the release that moved.
+  expect(await screen.findByText("Update tools")).toBeInTheDocument();
+  const summary = within(screen.getByRole("region", { name: "Summary" }));
+  expect(summary.getByText("v0.1.12-nightly.5177")).toBeInTheDocument();
+  expect(summary.getByText("t3")).toBeInTheDocument();
+
+  // One line per thing, named without the prefix the keys share; the unchanged one waits behind a toggle.
+  const changed = within(screen.getByRole("region", { name: "What changed" }));
+  expect(changed.getByText("t3")).toBeInTheDocument();
+  expect(changed.queryByText("codex")).toBeNull();
+  expect(changed.queryByText(release("0.1.12-nightly.5178").url)).toBeNull();
+  await userEvent.click(changed.getByRole("button", { name: "url, sha256" }));
+  expect(changed.getByTitle(release("0.1.12-nightly.5177").url)).toBeInTheDocument();
+  expect(changed.getByTitle(release("0.1.12-nightly.5178").sha256)).toBeInTheDocument();
+  await userEvent.click(changed.getByRole("button", { name: "+ 1 unchanged" }));
+  expect(changed.getByText("codex")).toBeInTheDocument();
+
+  const ran = within(screen.getByRole("region", { name: "What it ran" }));
+  expect(ran.getByText("ops@10.15.60.12:22")).toBeInTheDocument();
+  expect(ran.getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Update the tools", "Install the tools"]);
+});
+
+it("says so when a playbook run prepared the same values as the last one", async () => {
+  const detail = runDetail({ operation: "configure", status: "succeeded", currentStep: null });
+  detail.steps[0] = {
+    ...detail.steps[0],
+    name: "preview",
+    plan: null,
+    configurePreview: {
+      action: "update-tools", playbook: "update-tools.yml", commit: null, image: null, host: null, toolVersion: null, destructive: false,
+      tasks: [], changedFiles: [], vars: {}, secrets: [], prepared: { release: "2.1.0" }, previousPrepared: { release: "2.1.0" },
+      hostKeyFingerprints: [], previewSha256: sha,
+    },
+  };
+  mockApi({ "GET /api/runs/run-1": () => detail });
+  renderAt(<RunPage />, { path: "/runs/:id", route: "/runs/run-1" });
+  const changed = within(await screen.findByRole("region", { name: "What changed" }));
+  expect(changed.getByText("Nothing new: the same values as the last successful run.")).toBeInTheDocument();
+  expect(changed.getByRole("button", { name: "+ 1 unchanged" })).toBeInTheDocument();
 });
 
 it("lists what an approval will change, one line per kind, opening in place", async () => {

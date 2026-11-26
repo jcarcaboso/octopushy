@@ -10,9 +10,10 @@ import { ServiceIcon } from "../components/ServiceIcon";
 import { useDocumentTitle } from "../components/useDocumentTitle";
 import { ErrorMessage, NotFound, PageSkeleton } from "../components/States";
 import { buildRunOverview } from "../lib/changes";
-import { operationLabel, reasonLabel, runResourcePath } from "../lib/format";
+import { humanize, operationLabel, reasonLabel, runResourcePath } from "../lib/format";
 import { RunChanges } from "./run/RunChanges";
 import { RunFoot } from "./run/RunFoot";
+import { RunTasks } from "./run/RunTasks";
 import { RunVerdict } from "./run/RunVerdict";
 import { lastSegment } from "./run/steps";
 import { StepList } from "./run/StepList";
@@ -71,6 +72,8 @@ export function RunPage() {
   const number = run.number;
   const live = !isRunFinished(run.status);
   const name = lastSegment(run.address);
+  // A configure run runs one action of its workflow, which says more than "Configure".
+  const preview = run.operation === "configure" ? (data.steps.find((s) => s.configurePreview)?.configurePreview ?? null) : null;
   const hasActions = data.canCancel || data.canForceStop || data.canClose || data.canRunAgain;
 
   return (
@@ -87,7 +90,8 @@ export function RunPage() {
           </Link>
         </h1>
         <span className="run-head__why">
-          <span>{operationLabel(run.operation)}</span> · <span>{reasonLabel(run.reason)}</span>
+          <span>{preview ? humanize(preview.action) : operationLabel(run.operation)}</span>
+          {preview ? <span className="mono run-head__playbook"> {preview.playbook}</span> : null} · <span>{reasonLabel(run.reason)}</span>
         </span>
       </header>
       {error ? <ErrorMessage error={error} title="Showing the last data; refreshing failed" /> : null}
@@ -126,6 +130,7 @@ export function RunPage() {
         ) : null}
       />
       <RunChanges detail={data} tiles={tiles} finished={!live} />
+      <RunTasks detail={data} finished={!live} />
       <section className="run-section" aria-labelledby="run-steps-title">
         <h2 id="run-steps-title" className="run-section__title">{live ? "How it is going" : "How it went"}</h2>
         <StepList detail={data} />

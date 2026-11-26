@@ -138,6 +138,7 @@ public sealed partial class RunEngine
         run.Context = (context with { HostKeyReplan = why }).Serialize();
         step.Status = StepStatuses.Pending;
         step.Outputs = null;
+        Api.RunChanges.Refresh(run);
         step.FinishedAt = null;
         step.Detail = why;
         // What came of the old plan is undone with it: an approval decided by policy, steps it skipped.

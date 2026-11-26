@@ -480,6 +480,9 @@ public sealed partial class RunFactory(IOptions<OctopushyOptions> options, TimeP
         Commit = revision.Commit,
         Reason = reason,
         Context = context.Serialize(),
+        Action = operation == Operations.Configure ? context.Ansible?.Action : null,
+        // Its steps are added later and have no outputs yet: only what the context holds, such as a pipeline's images, compares.
+        Changes = Api.RunChanges.Serialize(Api.RunChanges.Of(context, [])),
         CreatedAt = clock.GetUtcNow(),
     };
 

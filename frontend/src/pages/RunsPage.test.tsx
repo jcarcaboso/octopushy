@@ -197,3 +197,35 @@ it("adds up every plan a pipeline's approval covers, and says nothing when they 
   expect(runProgress(pipeline(2, 1)).note).toBe("3 to create, 1 to update");
   expect(runProgress(pipeline(0, 0)).note).toBe("Approval is manual.");
 });
+
+it("says what a succeeded run changed before its duration, and what a waiting run will change", () => {
+  const done = (changes: RunSummary["changes"]) => run(43, { finishedAt: "2026-10-20T08:02:31Z", changes });
+  expect(
+    runProgress(
+      done([
+        { name: "t3", before: "v0.1.12-nightly.20261123.5177", after: "v0.1.12-nightly.20261124.5178" },
+        { name: "claude_code", before: "v2.1.49", after: "v2.1.52" },
+      ]),
+    ).note,
+  ).toBe("t3 v0.1.12-nightly.20261124.5178, claude_code v2.1.52 · 2 min 31 s");
+  expect(
+    runProgress(
+      done([
+        { name: "a", before: null, after: "1" },
+        { name: "b", before: "1", after: null },
+        { name: "c", before: "1", after: "2" },
+      ]),
+    ).note,
+  ).toBe("a 1, b removed +1 · 2 min 31 s");
+  expect(runProgress(done([])).note).toBe("nothing new · 2 min 31 s");
+  expect(runProgress(done(null)).note).toBe("2 min 31 s");
+
+  expect(runProgress({ ...waiting, changes: [{ name: "disk scsi0", before: "32 GiB", after: "64 GiB" }] }).note).toBe("disk scsi0 64 GiB");
+  // An empty list says nothing about what an approval covers, so the plan counts stay.
+  expect(runProgress({ ...waiting, changes: [] }).note).toBe("1 to update");
+});
+
+it("names the action of a configure run in the list", async () => {
+  show([run(43, { operation: "configure", action: "update-tools" })]);
+  expect(await screen.findByRole("link", { name: "#43 Update tools" })).toBeInTheDocument();
+});

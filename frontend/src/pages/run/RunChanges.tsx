@@ -21,6 +21,7 @@ import { emphasize, type Tile } from "../../lib/changes";
 import { imageChanges, levelLabels, summarizeChanges, type BumpLevel, type ImageChange } from "../../lib/images";
 import { levelTones } from "./steps";
 import { ChangeRows, TileValue, UnchangedToggle } from "./ChangeOverview";
+import { PreparedItems } from "./Prepared";
 
 export function LevelChip({ level }: { level: BumpLevel }) {
   return <Badge tone={levelTones[level]}>{levelLabels[level]}</Badge>;
@@ -150,7 +151,7 @@ function sectionTitle(status: string, finished: boolean) {
   return finished ? "What changed" : "What is changing";
 }
 
-/** What the run changes, one line per kind of change; the first opens by itself. */
+/** What the run changes: its prepared values listed open, then one line per other kind of change; the first opens by itself. */
 export function RunChanges({ detail, tiles, finished }: { detail: RunDetail; tiles: Tile[]; finished: boolean }) {
   const lines: Line[] = [];
   if (detail.images && detail.images.length > 0) {
@@ -165,15 +166,17 @@ export function RunChanges({ detail, tiles, finished }: { detail: RunDetail; til
       body: <Versions changes={changes} commit={detail.run.commit} baseline={detail.baselineCommit ?? null} />,
     });
   }
-  lines.push(...tiles.map(tileLine));
+  // What a playbook prepared is the change itself, so it is listed open, above the lines that open in place.
+  const direct = tiles.filter((tile) => tile.prepared);
+  lines.push(...tiles.filter((tile) => !direct.includes(tile)).map(tileLine));
 
-  const first = lines[0]?.key ?? null;
+  const first = direct.length > 0 ? null : lines[0]?.key ?? null;
   const [open, setOpen] = useState<Set<string>>(() => new Set(first ? [first] : []));
   const [touched, setTouched] = useState(false);
   // On a live run the changes can appear after the page loaded: then open the first one as if it had been there.
   if (!touched && first && open.size === 0) setOpen(new Set([first]));
 
-  if (lines.length === 0) return null;
+  if (lines.length === 0 && direct.length === 0) return null;
   const toggle = (key: string) => {
     setTouched(true);
     setOpen((current) => {
@@ -186,11 +189,19 @@ export function RunChanges({ detail, tiles, finished }: { detail: RunDetail; til
   return (
     <section className="run-section" aria-labelledby="run-changes-title">
       <h2 id="run-changes-title" className="run-section__title">{sectionTitle(detail.run.status, finished)}</h2>
-      <ul className="run-list">
-        {lines.map((line) => (
-          <LineItem key={line.key} line={line} open={open.has(line.key)} onToggle={() => toggle(line.key)} />
-        ))}
-      </ul>
+      {direct.map((tile) => (
+        <div key={tile.key} className="run-card">
+          {direct.length > 1 ? <div className="overview__heading mono">{tile.label}</div> : null}
+          <PreparedItems comparison={tile.prepared!} />
+        </div>
+      ))}
+      {lines.length > 0 ? (
+        <ul className="run-list">
+          {lines.map((line) => (
+            <LineItem key={line.key} line={line} open={open.has(line.key)} onToggle={() => toggle(line.key)} />
+          ))}
+        </ul>
+      ) : null}
       {tiles.length > 0 ? (
         <p className="run-section__note">
           {finished ? "What this run planned, not read from the guest." : "What this run will apply, not read from the guest."}

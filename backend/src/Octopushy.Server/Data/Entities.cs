@@ -886,6 +886,16 @@ public sealed class Run
     /// <summary>JSON: what the run's steps are built from, without secret values.</summary>
     public string Context { get; set; } = "{}";
 
+    /// <summary>For a configure run, the workflow action it runs, set when it is made; null for any other run. Lists show it.</summary>
+    public string? Action { get; set; }
+
+    /// <summary>
+    /// JSON: what the run changes, as lists show it, a list of <c>{name, before, after}</c>; null until it compared something.
+    /// Written by <see cref="Api.RunChanges.Refresh"/> whenever its previews' or plans' outputs change, because lists read
+    /// neither the context nor a finished run's outputs.
+    /// </summary>
+    public string? Changes { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset? StartedAt { get; set; }

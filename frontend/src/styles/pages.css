@@ -5486,3 +5486,221 @@ button.inbox-row {
     transition: none;
   }
 }
+
+/* What a playbook prepared, one line per thing, and the tasks it runs */
+.run-head__playbook {
+  font-size: var(--text-xs);
+}
+
+.verdict__bump--long {
+  font-size: 1.25rem;
+}
+
+.run-card {
+  margin-bottom: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.prepared {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prepared__item + .prepared__item {
+  border-top: 1px solid var(--border);
+}
+
+.prepared__row {
+  display: grid;
+  grid-template-columns: 1rem minmax(5rem, 11rem) minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  padding-block: var(--space-2);
+}
+
+.prepared__mark {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.prepared__name {
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+
+.prepared__value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.5em;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.prepared__old,
+.prepared__new,
+.prepared__same {
+  min-width: 0;
+  color: var(--text-muted);
+}
+
+.prepared__old--gone {
+  text-decoration: line-through;
+  text-decoration-color: var(--danger-fg);
+}
+
+.prepared__arrow {
+  color: var(--text-faint);
+}
+
+.prepared__new b {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.prepared__new.overview--add,
+.prepared__new.overview--add b {
+  color: var(--success-fg);
+}
+
+.prepared__note {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.prepared__item--quiet .prepared__name {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.prepared__more {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.prepared__more:hover {
+  color: var(--text);
+}
+
+.prepared__leaves {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  margin: 0 0 var(--space-3) calc(1rem + var(--space-3));
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.prepared__leaves dt {
+  color: var(--text-muted);
+}
+
+.prepared__leaves dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.prepared__line {
+  display: grid;
+  grid-template-columns: 1ch minmax(0, 1fr);
+  gap: 1ch;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.prepared__line--old > :first-child {
+  color: var(--danger-fg);
+}
+
+.prepared__line--new > :first-child {
+  color: var(--success-fg);
+}
+
+.prepared__line--new b {
+  font-weight: 400;
+  color: var(--text);
+}
+
+.prepared__nothing {
+  margin: 0;
+  padding-block: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.run-plays + .run-plays {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.run-plays__what {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.run-plays__stage {
+  margin-right: var(--space-2);
+  color: var(--text-muted);
+}
+
+.run-plays__tasks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: task;
+  font-size: var(--text-sm);
+}
+
+.run-plays__tasks li {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr);
+  padding-block: 2px;
+  counter-increment: task;
+}
+
+.run-plays__tasks li::before {
+  content: counter(task);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-plays__tasks .run-plays__play {
+  display: block;
+  counter-increment: none;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.run-plays__tasks .run-plays__play::before {
+  content: none;
+}
+
+@media (max-width: 560px) {
+  .prepared__row {
+    grid-template-columns: 1rem minmax(0, 1fr) auto;
+  }
+
+  .prepared__value {
+    grid-column: 2 / -1;
+    grid-row: 2;
+  }
+}
