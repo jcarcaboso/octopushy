@@ -311,7 +311,127 @@
     ]
   },
   {
-    "name": "a list of objects is indexed, and each can be a thing",
+    "name": "a list of objects with unique names is matched by name, so a new first item shifts nothing",
+    "prepared": {
+      "tools": [
+        {
+          "name": "antigravity",
+          "kind": "archive",
+          "version": "1.5.18"
+        },
+        {
+          "name": "claude",
+          "kind": "archive",
+          "version": "2.1.332"
+        },
+        {
+          "name": "codex",
+          "kind": "npm",
+          "version": "0.172.0"
+        }
+      ]
+    },
+    "previous": {
+      "tools": [
+        {
+          "name": "claude",
+          "kind": "archive",
+          "version": "2.1.330"
+        },
+        {
+          "name": "codex",
+          "kind": "npm",
+          "version": "0.172.0"
+        }
+      ]
+    },
+    "changes": [
+      {
+        "name": "claude",
+        "before": "2.1.330",
+        "after": "2.1.332"
+      },
+      {
+        "name": "antigravity",
+        "before": null,
+        "after": "1.5.18"
+      }
+    ]
+  },
+  {
+    "name": "an item gone from the middle of a named list shifts nothing either",
+    "prepared": {
+      "tools": [
+        {
+          "name": "antigravity",
+          "version": "1.5.18"
+        },
+        {
+          "name": "codex",
+          "version": "0.172.0"
+        }
+      ]
+    },
+    "previous": {
+      "tools": [
+        {
+          "name": "antigravity",
+          "version": "1.5.18"
+        },
+        {
+          "name": "claude",
+          "version": "2.1.332"
+        },
+        {
+          "name": "codex",
+          "version": "0.172.0"
+        }
+      ]
+    },
+    "changes": [
+      {
+        "name": "claude",
+        "before": "2.1.332",
+        "after": null
+      }
+    ]
+  },
+  {
+    "name": "a list of objects is matched by id when they have no names",
+    "prepared": {
+      "apps": [
+        {
+          "id": "web",
+          "tag": "1.1.0"
+        },
+        {
+          "id": "api",
+          "tag": "3.0.0"
+        }
+      ]
+    },
+    "previous": {
+      "apps": [
+        {
+          "id": "api",
+          "tag": "3.0.0"
+        },
+        {
+          "id": "web",
+          "tag": "1.0.0"
+        }
+      ]
+    },
+    "changes": [
+      {
+        "name": "web",
+        "before": "1.0.0",
+        "after": "1.1.0"
+      }
+    ]
+  },
+  {
+    "name": "a list of objects without unique plain names is indexed, and each can be a thing",
     "prepared": {
       "tools": [
         {
@@ -319,8 +439,14 @@
           "version": "2.0.0"
         },
         {
-          "name": "b",
+          "name": "a",
           "version": "1.0.0"
+        }
+      ],
+      "mirrors": [
+        {
+          "name": "x.y",
+          "version": "2"
         }
       ]
     },
@@ -331,8 +457,14 @@
           "version": "1.9.0"
         },
         {
-          "name": "b",
+          "name": "a",
           "version": "1.0.0"
+        }
+      ],
+      "mirrors": [
+        {
+          "name": "x.y",
+          "version": "1"
         }
       ]
     },
@@ -341,6 +473,11 @@
         "name": "tools[0]",
         "before": "1.9.0",
         "after": "2.0.0"
+      },
+      {
+        "name": "mirrors[0]",
+        "before": "1",
+        "after": "2"
       }
     ]
   },

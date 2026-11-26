@@ -19,13 +19,33 @@ function leafText(value: unknown): string {
   return JSON.stringify(value);
 }
 
-/** Leaf paths of prepared JSON. A list of plain values stays one leaf, so a new item is not a shifted index. */
+const identityKeys = ["name", "id", "key"];
+const plainKey = /^[^.[\]]+$/;
+
+/**
+ * The member that tells a list's objects apart, such as `name`: a string on every item, unique, and usable as a path
+ * part. Undefined when there is none, and the list is indexed.
+ */
+function identity(items: unknown[]): string | undefined {
+  return identityKeys.find((key) => {
+    const ids = items.map((item) => (isObject(item) ? item[key] : undefined));
+    return ids.every((id) => typeof id === "string" && plainKey.test(id)) && new Set(ids).size === ids.length;
+  });
+}
+
+/**
+ * Leaf paths of prepared JSON. A list of plain values stays one leaf, and objects with unique names are addressed by
+ * name, `tools.codex`, so a new item is not a shifted index.
+ */
 export function flatten(value: unknown, path = ""): Map<string, Leaf> {
   const leaves = new Map<string, Leaf>();
   const walk = (node: unknown, at: string) => {
     if (Array.isArray(node)) {
+      const key = identity(node);
       if (node.every((item) => !isObject(item) && !Array.isArray(item))) {
         leaves.set(at, { text: node.map(leafText).join(", "), json: JSON.stringify(node) });
+      } else if (key) {
+        for (const item of node as Record<string, string>[]) walk(item, at ? `${at}.${item[key]}` : item[key]);
       } else {
         node.forEach((item, i) => walk(item, `${at}[${i}]`));
       }
