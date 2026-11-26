@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.11.4:
+Milestone 1 has shipped, up to release 0.11.5:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,16 @@ Milestone 1 has shipped, up to release 0.11.4:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.11.5:
+
+- **Prepared lists matched by name**, from #220: a list of objects in a configure run's prepared values was compared by
+  index, so a tool added at the front of `tools` moved every tool down one slot and the run page and runs list showed
+  each tool's release against its neighbour's. When every object in a list has a unique `name`, `id` or `key`, its
+  items are now compared by it and shown by it, `claude` and not `tools[1]`; other lists of objects keep their index.
+
+Upgrading from 0.11.4: no migration. Runs made before it keep the What changed they stored; their page recomputes. No
+agent contract or Ansible image change: agents at 0.11.4 keep working.
 
 New in 0.11.4:
 
