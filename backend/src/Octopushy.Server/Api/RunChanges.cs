@@ -207,7 +207,10 @@ public static partial class RunChanges
             .ToList();
     }
 
-    /// <summary>Leaf paths of prepared JSON. A list of plain values stays one leaf, so a new item is not a shifted index.</summary>
+    /// <summary>
+    /// Leaf paths of prepared JSON. A list of plain values stays one leaf, and objects with unique names are addressed by
+    /// name, <c>tools.codex</c>, so a new item is not a shifted index.
+    /// </summary>
     private static OrderedDictionary<string, Leaf> Flatten(JsonNode? value)
     {
         var leaves = new OrderedDictionary<string, Leaf>(StringComparer.Ordinal);
@@ -220,6 +223,14 @@ public static partial class RunChanges
             {
                 case JsonArray array when array.All(i => i is not JsonObject and not JsonArray):
                     leaves[at] = new Leaf(string.Join(", ", array.Select(LeafText)), Stringify(array));
+                    break;
+                case JsonArray array when Identity(array) is { } key:
+                    foreach (var item in array)
+                    {
+                        var id = item![key]!.GetValue<string>();
+                        Walk(item, at.Length > 0 ? $"{at}.{id}" : id, depth + 1);
+                    }
+
                     break;
                 case JsonArray array:
                     for (var i = 0; i < array.Count; i++)
@@ -238,6 +249,22 @@ public static partial class RunChanges
         Walk(value, "", 0);
         return leaves;
     }
+
+    private static readonly string[] IdentityKeys = ["name", "id", "key"];
+
+    /// <summary>
+    /// The member that tells a list's objects apart, such as <c>name</c>: a string on every item, unique, and usable as a
+    /// path part. Null when there is none, and the list is indexed.
+    /// </summary>
+    private static string? Identity(JsonArray array) =>
+        IdentityKeys.FirstOrDefault(key =>
+        {
+            var ids = array.Select(item => item is JsonObject obj && obj[key] is JsonValue value && value.GetValueKind() == JsonValueKind.String
+                ? value.GetValue<string>()
+                : null).ToList();
+            return ids.All(id => id is { Length: > 0 } && id.IndexOfAny(['.', '[', ']']) < 0)
+                && ids.Distinct(StringComparer.Ordinal).Count() == ids.Count;
+        });
 
     /// <summary>A plain value as text: a string as it is, anything else as JavaScript writes it.</summary>
     private static string LeafText(JsonNode? node) =>
