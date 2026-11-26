@@ -58,7 +58,7 @@ tar = { version = "0.4", default-features = false }
 flate2 = "1"
 sha2 = "0.10"
 hex = "0.4"
-base64 = "0.22"
+base64 = "0.23"
 fastrand = "2"
 libc = "0.2"
 

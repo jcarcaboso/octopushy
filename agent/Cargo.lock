@@ -1232,7 +1232,7 @@ version = "0.11.4"
 dependencies = [
  "anyhow",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "clap",
  "fastrand",
  "flate2",
