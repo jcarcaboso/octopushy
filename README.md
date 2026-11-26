@@ -7,7 +7,7 @@ The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
 ## Status
 
-Milestone 1 has shipped, up to release 0.11.3:
+Milestone 1 has shipped, up to release 0.11.4:
 
 - Definitions as [versioned workflows](docs/workflows.md): a guest or service names `<workflow>@<major>`
   or `@<major>.<minor>`, resolved from the release tags of a
@@ -34,6 +34,25 @@ Milestone 1 has shipped, up to release 0.11.3:
 - Proxmox installations observed through their API, next to what Git declares. An
   installation can be [observed only](docs/safety-boundary.md), and no plan may change,
   remove or import a machine that is not its run's own.
+
+New in 0.11.4:
+
+- **What a run changes**, from #216: a configure run's page grouped its prepared values as a raw key and value table, so a
+  long address collapsed to one letter per line, and nothing said which playbook ran. The page now groups them into
+  things: a group with a version or tag, or an address next to its checksum, is one line with its old and new release,
+  and the raw values open below it. Plain values keep one line per path, and unchanged values fold behind a toggle. A
+  configure run is titled by its action and playbook, and a new section lists the tasks its preview listed.
+- **A What changed column in the runs list**, from #216: run summaries gain `action` (configure runs only) and `changes`,
+  the names and old and new values of what the run changes, null when it compared nothing and empty when it found
+  nothing new. Run tables show the action as the run's title and a **What changed** column, and neighbouring runs of the
+  same title and reason that found nothing new fold into one row that opens. The values are stored on the run and in
+  `GET /api/runs`, capped at 20 lines and 200 characters per string. The server's grouping is a port of the
+  frontend's, and both are checked against `contracts/examples/run-changes.json` so they cannot drift.
+
+Upgrading from 0.11.3: one migration, `RunListSummary`, which adds two nullable columns to `runs` and runs on start.
+Runs made before it have no summary, so their page keeps the raw table and their row has no What changed. Stop the old
+backend before starting the new one: only one server may own the database. No agent contract or Ansible image change:
+agents at 0.11.3 keep working, and the new run-summary fields are additive.
 
 New in 0.11.3:
 
