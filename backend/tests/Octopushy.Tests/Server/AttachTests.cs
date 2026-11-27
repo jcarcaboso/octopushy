@@ -1,7 +1,9 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Octopushy.Agent.V1;
+using Octopushy.Definitions;
 using Octopushy.Server.Api;
 using Octopushy.Server.Data;
 using Octopushy.Server.Inventory;
@@ -237,6 +239,53 @@ public class AttachTests(PostgresFixture postgres) : IClassFixture<PostgresFixtu
         var run = await server.LatestRunAsync(Guest, Operations.Provision);
         Assert.Equal(RunStatuses.Cancelled, run.Status);
         Assert.Contains("has no provision runs", run.Detail);
+        Assert.Empty(agent.TakeAssignments());
+    }
+
+    [Fact]
+    public async Task Refreshing_validation_of_an_attached_guest_keeps_its_binding_and_does_not_repeat_mutations()
+    {
+        var repository = TestRepository.Minimal();
+        repository.Write(GuestFile, """
+            schemaVersion: 1
+            type: vm
+            machine: attached
+            host: korriban
+            vmid: 310
+            workflow: test-vm@1
+            links:
+              - { label: Status, url: "https://ha.example.test/", check: true }
+            """);
+        var workflowFile = "workflows/test-vm/workflow.yaml";
+        repository.Write(workflowFile, File.ReadAllText(Path.Combine(repository.Root, workflowFile)).Replace("manages: vm\n", "manages: vm\ninputs: inputs.schema.json\n"));
+        repository.Write("workflows/test-vm/inputs.schema.json", """{"type":"object","required":["hardware","network"]}""");
+        await using var server = await ServerHarness.StartAsync(postgres, repository);
+        var agent = await server.ConnectAgentAsync("home");
+        await server.SyncAndTrustAsync();
+        await ObserveAsync(server, (Vmid, "legacy-app", "korriban"));
+        await AttachAsync(server, agent);
+        var original = await server.ResourceAsync(Guest);
+        var runs = await server.QueryAsync(db => db.Runs.CountAsync());
+        var attempts = await server.QueryAsync(db => db.Attempts.CountAsync());
+        await server.WithDbAsync(async db =>
+        {
+            var issue = new DefinitionIssue(IssueSeverity.Error, GuestFile, null,
+                "Old backend rejects attached hardware", Guest, IssueSources.WorkflowSchema);
+            var issues = JsonSerializer.Serialize(new[] { issue }, InventoryUpdater.IssueJson);
+            var revision = await db.Revisions.SingleAsync(r => r.Id == original.LastRevisionId);
+            revision.ErrorCount = 1;
+            revision.Issues = issues;
+            var resource = await db.Resources.SingleAsync(r => r.Id == original.Id);
+            resource.Valid = false;
+            resource.Issues = issues;
+            await db.SaveChangesAsync();
+        });
+
+        await server.SyncAsync();
+        await server.SyncAsync();
+        Assert.Equal(JsonSerializer.Serialize(original), JsonSerializer.Serialize(await server.ResourceAsync(Guest)));
+        Assert.Equal(runs, await server.QueryAsync(db => db.Runs.CountAsync()));
+        Assert.Equal(attempts, await server.QueryAsync(db => db.Attempts.CountAsync()));
         Assert.Empty(agent.TakeAssignments());
     }
 

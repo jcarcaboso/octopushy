@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Octopushy.Definitions;
@@ -236,6 +235,9 @@ public sealed class RepositorySync(
                     .OrderByDescending(r => r.Sequence).FirstOrDefaultAsync(cancellationToken);
                 if (loaded is not null && current.HeadRevisionId == loaded.Id && loaded.InventoryAppliedAt is not null)
                 {
+                    // Validation belongs to this backend, not to the commit/digest identity. Refresh only
+                    // validation here: applying inventory again can propose work or alter lifecycle state.
+                    await services.GetRequiredService<InventoryUpdater>().RefreshValidationAsync(db, loaded, repository, cancellationToken);
                     await db.SaveChangesAsync(cancellationToken);
                     await transaction.CommitAsync(cancellationToken);
                     return false;
@@ -252,10 +254,6 @@ public sealed class RepositorySync(
                     Author = info.Author,
                     CommittedAt = info.CommittedAt,
                     LoadedAt = clock.GetUtcNow(),
-                    RepositoryValid = repository.RepositoryValid,
-                    ErrorCount = repository.Issues.Count(i => i.Severity == IssueSeverity.Error),
-                    WarningCount = repository.Issues.Count(i => i.Severity == IssueSeverity.Warning),
-                    Issues = JsonSerializer.Serialize(repository.Issues, InventoryUpdater.IssueJson),
                 };
                 if (loaded is null) db.Revisions.Add(revision);
                 current.HeadRevisionId = revision.Id;
